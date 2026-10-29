@@ -1,0 +1,159 @@
+[
+  {
+    "_index": "packets-2026-10-28",
+    "_type": "doc",
+    "_score": null,
+    "_source": {
+      "layers": {
+        "frame": { "frame.time_epoch": "1793208600.000000000", "frame.number": "1" },
+        "hci_h4": { "hci_h4.direction": "0x00000000", "hci_h4.type": "0x02" },
+        "btatt": {
+          "btatt.opcode": "0x02",
+          "btatt.opcode_tree": { "btatt.opcode.method": "0x02" },
+          "btatt.client_rx_mtu": "247"
+        }
+      }
+    }
+  },
+  {
+    "_source": {
+      "layers": {
+        "frame": { "frame.time_epoch": "1793208600.020000000", "frame.number": "2" },
+        "hci_h4": { "hci_h4.direction": "0x00000001", "hci_h4.type": "0x02" },
+        "btatt": {
+          "btatt.opcode": "0x03",
+          "btatt.server_rx_mtu": "247"
+        }
+      }
+    }
+  },
+  {
+    "_source": {
+      "layers": {
+        "frame": { "frame.time_epoch": "1793208600.100000000", "frame.number": "3" },
+        "hci_h4": { "hci_h4.direction": "0x00000001", "hci_h4.type": "0x02" },
+        "btatt": {
+          "btatt.opcode": "0x09",
+          "btatt.length": "21",
+          "Attribute Data, Handle: 0x000d, UUID: Nordic UART Rx": {
+            "btatt.handle": "0x000d",
+            "btatt.characteristic_properties": "0x0c",
+            "btatt.characteristic_value_handle": "0x000e",
+            "btatt.characteristic_uuid128": "6e:40:00:02:b5:a3:f3:93:e0:a9:e5:0e:24:dc:ca:9e"
+          },
+          "Attribute Data, Handle: 0x000f, UUID: Nordic UART Tx": {
+            "btatt.handle": "0x000f",
+            "btatt.handle": "0x000f",
+            "btatt.characteristic_properties": "0x10",
+            "btatt.characteristic_value_handle": "0x0010",
+            "btatt.characteristic_uuid128": "6e:40:00:03:b5:a3:f3:93:e0:a9:e5:0e:24:dc:ca:9e"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_source": {
+      "layers": {
+        "frame": { "frame.time_epoch": "1793208600.200000000", "frame.number": "4" },
+        "hci_h4": { "hci_h4.direction": "0x00000000", "hci_h4.type": "0x02" },
+        "btatt": {
+          "btatt.opcode": "0x12",
+          "btatt.handle": "0x0011",
+          "btatt.value": "01:00"
+        }
+      }
+    }
+  },
+  {
+    "_source": {
+      "layers": {
+        "frame": { "frame.time_epoch": "1793208600.220000000", "frame.number": "5" },
+        "hci_h4": { "hci_h4.direction": "0x00000001", "hci_h4.type": "0x02" },
+        "btatt": { "btatt.opcode": "0x13" }
+      }
+    }
+  },
+  {
+    "_source": {
+      "layers": {
+        "frame": { "frame.time_epoch": "1793208600.500000000", "frame.number": "6" },
+        "hci_h4": { "hci_h4.direction": "0x00000000", "hci_h4.type": "0x02" },
+        "btatt": {
+          "btatt.opcode": "0x12",
+          "btatt.handle": "0x000e",
+          "btatt.handle_tree": {
+            "btatt.service_uuid128": "6e:40:00:01:b5:a3:f3:93:e0:a9:e5:0e:24:dc:ca:9e",
+            "btatt.uuid128": "6e:40:00:02:b5:a3:f3:93:e0:a9:e5:0e:24:dc:ca:9e"
+          },
+          "btatt.value": "ab:00:00:05:02:f8:00:05:02:00:08:00:00"
+        }
+      }
+    }
+  },
+  {
+    "_source": {
+      "layers": {
+        "frame": { "frame.time_epoch": "1793208600.540000000", "frame.number": "7" },
+        "hci_h4": { "hci_h4.direction": "0x00000001", "hci_h4.type": "0x02" },
+        "btatt": {
+          "btatt.opcode": "0x1b",
+          "btatt.handle": "0x0010",
+          "btatt.value": "ab:10:00:00:00:00:00:05"
+        }
+      }
+    }
+  },
+  {
+    "_source": {
+      "layers": {
+        "frame": { "frame.time_epoch": "1793208600.580000000", "frame.number": "8" },
+        "hci_h4": { "hci_h4.direction": "0x00000001", "hci_h4.type": "0x02" },
+        "btatt": {
+          "btatt.opcode": "0x1b",
+          "btatt.handle": "0x0010",
+          "btatt.value": "ab:00:00:06:d1:c3:01:00"
+        }
+      }
+    }
+  },
+  {
+    "_source": {
+      "layers": {
+        "frame": { "frame.time_epoch": "1793208600.600000000", "frame.number": "9" },
+        "hci_h4": { "hci_h4.direction": "0x00000001", "hci_h4.type": "0x02" },
+        "btatt": {
+          "btatt.opcode": "0x1b",
+          "btatt.handle": "0x0010",
+          "btatt.value": "02:00:09:00:01:55"
+        }
+      }
+    }
+  },
+  {
+    "_source": {
+      "layers": {
+        "frame": { "frame.time_epoch": "2026-10-28T17:30:00.650000000Z", "frame.number": "10" },
+        "hci_h4": { "hci_h4.direction": "0x00000000", "hci_h4.type": "0x02" },
+        "btatt": {
+          "btatt.opcode": "0x52",
+          "btatt.handle": "0x000e",
+          "btatt.value": "ab:10:00:00:00:00:01:00"
+        }
+      }
+    }
+  },
+  {
+    "_source": {
+      "layers": {
+        "frame": { "frame.time_epoch": "1793208600.700000000", "frame.number": "11" },
+        "hci_h4": { "hci_h4.direction": "0x00000001", "hci_h4.type": "0x02" },
+        "btatt": {
+          "btatt.opcode": "0x1b",
+          "btatt.handle": "0x0020",
+          "btatt.value": "00:11:22"
+        }
+      }
+    }
+  }
+]

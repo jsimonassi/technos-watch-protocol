@@ -1,0 +1,6 @@
+{"type":"header","device":"Mormaii_fitGPS","firmware":null,"platform":"android","mtu":247,"recordedAt":"2026-10-28T14:30:00-03:00","timeZone":"America/Sao_Paulo"}
+{"type":"packet","dir":"TX","atMs":0,"characteristic":"6e400002-b5a3-f393-e0a9-e50e24dcca9e","hex":"AB00000502F800050200080000"}
+{"type":"packet","dir":"RX","atMs":40,"characteristic":"6e400003-b5a3-f393-e0a9-e50e24dcca9e","hex":"AB10000000000005"}
+{"type":"packet","dir":"RX","atMs":80,"characteristic":"6e400003-b5a3-f393-e0a9-e50e24dcca9e","hex":"AB000006D1C30100"}
+{"type":"packet","dir":"RX","atMs":100,"characteristic":"6e400003-b5a3-f393-e0a9-e50e24dcca9e","hex":"020009000155"}
+{"type":"packet","dir":"TX","atMs":150,"characteristic":"6e400002-b5a3-f393-e0a9-e50e24dcca9e","hex":"AB10000000000100"}
