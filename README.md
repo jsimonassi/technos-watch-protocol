@@ -2,7 +2,7 @@
 
 Biblioteca Kotlin Multiplatform que fala o protocolo BLE dos relógios Mormaii/Technos sem SDK de fabricante. Ela cuida do domínio (passos, sono, bateria, versão), da sessão com o relógio (conexão, handshake, fila de comandos, sincronização, reconexão) e dos codecs de cada família. O BLE da plataforma fica com o host, que implementa uma interface pequena (`Transport`) e entrega os callbacks de volta.
 
-**Estado: prova de conceito.** Família suportada: **SMA**, modelo **Mormaii fitGPS** (`Profiles.MORMAII_FIT_GPS`). O primeiro host é o `react-native-technos-core-next` (repositório irmão deste) no Android. O iOS já compila e gera o XCFramework, mas ainda não tem host. Nada foi validado com o relógio real: as hipóteses abertas estão em [`docs/protocolo-sma.md`](docs/protocolo-sma.md), seção 8.
+**Estado: prova de conceito.** Família suportada: **SMA**, modelo **Mormaii fitGPS** (`Profiles.MORMAII_FIT_GPS`). O primeiro host é o `react-native-technos-core-next` (repositório irmão deste) no Android. O iOS já compila e gera o XCFramework, mas ainda não tem host. A primeira gravação real (fitGPS com firmware 0.2.1 e um telefone Android, `fixtures/real/fitgps/0.2.1/`) reproduz inteira no replay: pareamento, comandos, Bluetooth desligado e religado, passos e 64 páginas de sono. O que ela provou e as hipóteses que continuam abertas estão em [`docs/protocolo-sma.md`](docs/protocolo-sma.md), seção 8; a validação no relógio que ficou para depois está em [`docs/pendencias.md`](docs/pendencias.md).
 
 **Não é:** um módulo React Native, um wrapper de SDK de fabricante nem uma implementação de BLE. Também ficam de fora DFU/OTA, notificações, chamadas, alarmes, HR, SpO2 e as outras famílias.
 
@@ -84,7 +84,7 @@ O contrato completo (threading, regra de um callback terminal por `requestId`, o
 ./gradlew :protocol:jvmTest --tests 'br.com.grupotechnos.watch.protocol.sma.SmaFrameGoldenTest'   # uma classe
 ```
 
-O `dokkaHtml` falha se qualquer declaração pública ficar sem KDoc. Os testes de sessão rodam em tempo virtual e não precisam de relógio. Todo `.jsonl` em `fixtures/real/` vira teste de replay automaticamente; como gravar e converter está em [`docs/fixtures.md`](docs/fixtures.md).
+O `dokkaHtml` falha se qualquer declaração pública ficar sem KDoc. Os testes de sessão rodam em tempo virtual e não precisam de relógio. Todo `.jsonl` em `fixtures/real/` vira teste de replay automaticamente, e a pasta é input do Gradle, então uma gravação nova roda na execução seguinte; cada arquivo reproduzido imprime uma linha `REPLAY` no relatório do teste. Como gravar, o que versionar e como converter está em [`docs/fixtures.md`](docs/fixtures.md).
 
 ## Documentação
 
@@ -95,6 +95,7 @@ O `dokkaHtml` falha se qualquer declaração pública ficar sem KDoc. Os testes 
 | [`docs/sma-dados.md`](docs/sma-dados.md) | registros de passos e sono, agrupamento por hora, estimativas, analisador de sono |
 | [`docs/fixtures.md`](docs/fixtures.md) | formato `.jsonl`, como gravar (app de exemplo, HCI snoop), replay, procedência de cada fixture |
 | [`docs/decisoes.md`](docs/decisoes.md) | decisões que não estão em nenhuma SDK (ADRs curtos), com como reverter |
+| [`docs/pendencias.md`](docs/pendencias.md) | validação no relógio que ficou para depois (checklist) e itens técnicos abertos, com o que cada um fecha e onde registrar |
 | [`docs/glossario.md`](docs/glossario.md) | termos de BLE, do protocolo, da sessão e dos testes |
 | [`CLAUDE.md`](CLAUDE.md) | regras para quem muda o código (pessoas e agentes) |
 | `protocol/src/commonMain/.../<pacote>/README.md` | propósito, limites, dependências, invariantes e testes de cada pacote |

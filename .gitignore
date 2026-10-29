@@ -1,0 +1,11 @@
+.gradle/
+build/
+.kotlin/
+local.properties
+.idea/
+*.iml
+.DS_Store
+captures/
+# Log nativo exportado pelo app de exemplo do Repo 2: tem o MAC do relógio e nunca entra no repositório (só o frames-*.jsonl vira fixture).
+logs-*.jsonl
+corenext-export/

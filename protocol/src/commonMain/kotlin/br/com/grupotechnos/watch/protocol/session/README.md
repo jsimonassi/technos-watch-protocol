@@ -27,8 +27,10 @@
 - Cada `requestId` recebe exatamente um callback terminal (`TerminalCallbackInvariantTest`).
 - Comandos só em `READY`/`SYNCING`, um de cada vez, em ordem.
 - O primeiro pareamento nunca reconecta sozinho; a reconexão nunca tem timeout, espera cada vez mais entre tentativas que falharam e desiste quando o relógio recusa o LOGIN (ADR 11).
+- Bluetooth desligado não deixa resposta esperada para trás: a contagem de desconexões esperadas zera e o `disconnect` de limpeza não conta (contrato B, ADR 18), então a primeira falha depois de religar nunca é engolida.
+- A mescla de passos só aceita amostras de `hoje - historyRetentionDays` até hoje; o resto vai para o log (`Session/mergeSteps`).
 - `getStepsDays`/`getSleepSessions` devolvem todo dia não confirmado, qualquer que seja `daysBefore` (ADR 15).
 - `getStepsDays`/`getSleepSessions` nunca falam com o relógio e nunca bloqueiam.
 - Nada do escopo de uma conexão sobrevive à queda dela.
 
-**Testes.** `commonTest/.../session/` (`WatchSessionLifecycleTest`, `WatchSessionCommandsTest`, `TerminalCallbackInvariantTest`, `HistoryStoreTest`, todos com `FakeTransport` + `SmaWatchSimulator` em tempo virtual) e `jvmTest/.../session/` (`SmaSessionReplayTest`, `RealFixturesReplayTest`, com as gravações de `fixtures/`).
+**Testes.** `commonTest/.../session/` (`WatchSessionLifecycleTest`, `WatchSessionCommandsTest`, `BluetoothOffContractTest`, `TerminalCallbackInvariantTest`, `HistoryStoreTest`, todos com `FakeTransport` + `SmaWatchSimulator` em tempo virtual) e `jvmTest/.../session/` (`SmaSessionReplayTest`, `RealFixturesReplayTest`, com as gravações de `fixtures/`, inclusive a real do fitGPS 0.2.1).

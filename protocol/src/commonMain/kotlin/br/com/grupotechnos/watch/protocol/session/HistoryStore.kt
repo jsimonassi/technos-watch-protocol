@@ -74,14 +74,27 @@ internal class HistoryStore(
 	 * Mescla amostras novas: a chave é `atEpochMillis` e a leitura mais nova substitui a antiga (no SMA, a mesma hora
 	 * relida depois tem o valor atualizado da hora). Thread da sessão.
 	 *
+	 * Antes, descarta as amostras anteriores a `hoje - retentionDays` (no fuso atual do telefone), a mesma fronteira da
+	 * [prune], e as do futuro: dia depois de hoje **e** mais de [FUTURE_TOLERANCE_MS] à frente de agora. Um registro
+	 * `mode 0` com data errada (relógio desacertado, buffer antigo) viraria um dia pendente que nunca sai: a poda não
+	 * apaga o futuro e o `refreshSteps` não poda nada; [stepsDays] esconde o futuro, mas o dia aparece quando a data
+	 * chega. O log registra quantas saíram (WARN quando alguma é do futuro, porque isso indica o relógio com a data
+	 * errada) e quantas de amanhã entraram pela folga (INFO).
+	 *
+	 * Custo: uma amostra descartada não volta se o relógio apaga o que já foi lido (H2, sugerida para SPORT em
+	 * `docs/protocolo-sma.md`, seção 8). A folga existe para não descartar passos reais com hora de parede de outro fuso
+	 * (ver [FUTURE_TOLERANCE_MS]); acima dela, eles se perdem (`docs/decisoes.md`, ADR 16, emenda).
+	 *
 	 * @return quantas amostras eram novas ou mudaram.
 	 */
-	fun mergeSteps(samples: List<StepsSample>): Int {
+	fun mergeSteps(samples: List<StepsSample>, retentionDays: Int): Int {
 		if (samples.isEmpty()) return 0
+		val kept = withinWindow(samples, retentionDays)
+		if (kept.isEmpty()) return 0
 		val byInstant = LinkedHashMap<Long, StepsSample>()
 		steps.forEach { byInstant[it.atEpochMillis] = it }
 		var changed = 0
-		for (sample in samples) {
+		for (sample in kept) {
 			if (byInstant.put(sample.atEpochMillis, sample) != sample) changed++
 		}
 		steps = byInstant.values.sortedBy { it.atEpochMillis }
@@ -193,6 +206,47 @@ internal class HistoryStore(
 		return sessions
 	}
 
+	/**
+	 * As amostras de [samples] com dia a partir de `hoje - retentionDays` e que não são do futuro (dia depois de hoje e
+	 * mais de [FUTURE_TOLERANCE_MS] à frente de agora); registra no log quantas ficaram de fora e quantas de amanhã
+	 * entraram pela folga.
+	 */
+	private fun withinWindow(samples: List<StepsSample>, retentionDays: Int): List<StepsSample> {
+		val tz = clock.timeZoneId()
+		val today = todayKey()
+		val latestKept = clock.nowEpochMillis() + FUTURE_TOLERANCE_MS
+		val oldestKept = dayKeyBefore(retentionDays.coerceAtLeast(0))
+		var future = 0
+		var old = 0
+		var ahead = 0
+		val kept = samples.filter { sample ->
+			val day = TimeFormat.dayKey(sample.atEpochMillis, tz)
+			when {
+				day > today && sample.atEpochMillis > latestKept -> { future++; false }
+				day > today -> { ahead++; true }
+				day < oldestKept -> { old++; false }
+				else -> true
+			}
+		}
+		val toleranceHours = FUTURE_TOLERANCE_MS / 3_600_000
+		if (future + old > 0) {
+			logger.log(
+				if (future > 0) LogLevel.WARN else LogLevel.INFO,
+				"Session/mergeSteps",
+				"dropped ${future + old} of ${samples.size} step samples: " +
+					"$future after today ($today) and more than $toleranceHours h ahead, $old before $oldestKept",
+			)
+		}
+		if (ahead > 0) {
+			logger.log(
+				LogLevel.INFO,
+				"Session/mergeSteps",
+				"kept $ahead step samples after today ($today) within $toleranceHours h of now (watch clock in another time zone?)",
+			)
+		}
+		return kept
+	}
+
 	/** Registra quando a resposta traz dias anteriores à janela pedida, para o log explicar a diferença. */
 	private fun logOlderThanWindow(method: String, daysBefore: Int, dayKeys: List<String>) {
 		val oldest = dayKeyBefore(daysBefore.coerceAtLeast(0))
@@ -240,5 +294,18 @@ internal class HistoryStore(
 		} catch (error: Exception) {
 			logger.log(LogLevel.ERROR, "Session/$method", "store failed, keeping the in-memory copy: ${error.message}")
 		}
+	}
+
+	private companion object {
+		/**
+		 * Folga para amostras de amanhã na mescla de passos: 3 h, a maior diferença entre os fusos do Brasil (UTC-2 a
+		 * UTC-5). O relógio guarda hora de parede (`docs/sma-dados.md`, seção 1) e a sessão só o acerta no começo de cada
+		 * conexão, depois do `postLoginDelayMs`. Se o telefone muda de fuso para oeste com o relógio conectado, ou se o
+		 * sync roda antes desse acerto, os registros mais novos ficam até a diferença entre os fusos à frente de agora;
+		 * perto da meia-noite, isso é amanhã. Ex.: 23:30 em `America/Manaus` com o relógio ainda em São Paulo; o registro
+		 * ao vivo vem 00:30 e vira 00:00 de amanhã em Manaus, 30 min à frente. Nenhuma SDK define este número
+		 * (`docs/decisoes.md`, ADR 16, emenda).
+		 */
+		const val FUTURE_TOLERANCE_MS: Long = 3 * 60 * 60 * 1000L
 	}
 }

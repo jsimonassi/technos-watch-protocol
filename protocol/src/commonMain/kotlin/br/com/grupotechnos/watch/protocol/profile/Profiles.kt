@@ -5,7 +5,9 @@ package br.com.grupotechnos.watch.protocol.profile
  */
 public object Profiles {
 	/**
-	 * Serviço SMA "ROUND" (`FF60`). A SDK Android prefere este quando existe (`SmaManager.selectUUID`).
+	 * Serviço SMA "ROUND" (`FF60`). A SDK Android prefere este quando existe (`SmaManager.selectUUID`). O fitGPS com
+	 * firmware 0.2.1 não o expõe (hipótese H6 refutada para esse firmware; `docs/decisoes.md`, ADR 6); continua primeiro
+	 * na lista porque a ordem não custa nada a um relógio que não o tem.
 	 */
 	public val SMA_ROUND: GattCandidate = GattCandidate(
 		service = "0000ff60-0000-1000-8000-00805f9b34fb",
@@ -14,7 +16,9 @@ public object Profiles {
 	)
 
 	/**
-	 * Nordic UART Service. É o único que o Core iOS atual usa com o fitGPS (`SMAService.m:1056-1061`).
+	 * Nordic UART Service. É o único que o Core iOS atual usa com o fitGPS (`SMAService.m:1056-1061`) e o único serviço
+	 * de dados que o fitGPS 0.2.1 expõe (`fixtures/real/fitgps/0.2.1/pair-commands-bt-reconnect-sync.jsonl`; a lista
+	 * de serviços está em `docs/protocolo-sma.md`, seção 1). O relógio não o anuncia no advertising.
 	 */
 	public val SMA_NUS: GattCandidate = GattCandidate(
 		service = "6e400001-b5a3-f393-e0a9-e50e24dcca9e",

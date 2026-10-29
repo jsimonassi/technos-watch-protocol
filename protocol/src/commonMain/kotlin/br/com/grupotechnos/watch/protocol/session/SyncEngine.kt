@@ -14,7 +14,8 @@ import kotlinx.coroutines.CancellationException
  *
  * Regras (`docs/arquitetura.md`, fluxo "relógio → app"):
  * - **Passos** são obrigatórios: erro na leitura encerra o sync com o código do erro (no SMA, `TIMEOUT` de GET não
- *   tem retentativa, `docs/decisoes.md`).
+ *   tem retentativa, `docs/decisoes.md`). Amostras do futuro (dia depois de hoje e mais de 3 h à frente de agora) ou
+ *   fora de `historyRetentionDays` não entram no histórico, nem no `refreshSteps` ([HistoryStore.mergeSteps]).
  * - **Sono** é exploratório no fitGPS (hipótese H4): erro ou lista vazia vão para o log e o sync continua com sucesso.
  *   A exceção é `DISCONNECTED`, que é propagado para a queda do link ser tratada como queda.
  * - Progresso: 0 no início e `100 * (i + 1) / n` ao fim de cada tipo pedido, então `[STEPS, SLEEP]` dá 0, 50, 100.
@@ -24,10 +25,10 @@ internal class SyncEngine(
 	private val history: HistoryStore,
 	private val logger: WatchLogger,
 ) {
-	/** Lê os passos e mescla no histórico. */
-	suspend fun refreshSteps(driver: DeviceDriver) {
+	/** Lê os passos e mescla no histórico, sem as amostras fora da janela `hoje - retentionDays .. hoje`. */
+	suspend fun refreshSteps(driver: DeviceDriver, retentionDays: Int) {
 		val samples = driver.readSteps()
-		val changed = history.mergeSteps(samples)
+		val changed = history.mergeSteps(samples, retentionDays)
 		logger.log(LogLevel.INFO, "Session/refreshSteps", "read ${samples.size} step samples, $changed new or changed")
 	}
 
@@ -41,7 +42,7 @@ internal class SyncEngine(
 		onProgress(0)
 		ordered.forEachIndexed { index, kind ->
 			when (kind) {
-				DataKind.STEPS -> refreshSteps(driver)
+				DataKind.STEPS -> refreshSteps(driver, retentionDays)
 				DataKind.SLEEP -> readSleep(driver)
 			}
 			onProgress(100 * (index + 1) / ordered.size)

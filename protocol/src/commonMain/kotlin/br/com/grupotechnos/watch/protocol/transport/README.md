@@ -12,8 +12,10 @@
 
 - Toda operação com `requestId` termina com exatamente um evento com o mesmo `requestId`.
 - `disconnect()` termina com um `onDisconnected` quando havia link aberto ou conexão pendente, e com nenhum quando não havia (`docs/decisoes.md`, ADR 12).
+- `connect()` que falha sem chegar a conectar (conexão direta que falha, ou recusa na hora: Bluetooth desligado, sem permissão, endereço inválido) termina com exatamente um `onDisconnected`; só a conexão pendente que falha antes de conectar pode ficar sem evento, porque o host a mantém.
+- **Bluetooth desligado, contrato B** (`docs/decisoes.md`, ADR 18): o host entrega `onBluetoothStateChanged(false)` e **nenhum** `onDisconnected` pelos links abertos e conexões pendentes que isso derrubou, nem antes nem depois; depois disso, `disconnect()` não emite nada até um novo `connect()`. Um `onDisconnected` entregue antes do `onBluetoothStateChanged(false)` (o stack reportou a queda antes do aviso) é uma queda comum. O `CoreBluetooth` já se comporta assim (`poweredOff` sem `didDisconnectPeripheral`); no Android o host suprime os `onDisconnected` que o `BluetoothGatt` entrega ao desligar.
 - Eventos na ordem em que aconteceram; `TransportEvents` pode ser chamado de qualquer thread e nunca bloqueia.
 - `connect(autoReconnect = true)` mantém a conexão pendente sem timeout (Android `autoConnect = true`).
 - O host copia o array da notificação se a plataforma reutilizar o buffer.
 
-**Testes.** `commonTest/.../testing/FakeTransport` implementa o contrato e é usado por todos os testes de sessão.
+**Testes.** `commonTest/.../testing/FakeTransport` implementa o contrato (inclusive o contrato B em `setBluetooth`) e é usado por todos os testes de sessão; `BluetoothOffContractTest` cobre o Bluetooth desligado.

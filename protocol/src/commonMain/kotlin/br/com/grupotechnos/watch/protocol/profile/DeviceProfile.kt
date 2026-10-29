@@ -63,7 +63,9 @@ public enum class StepsAggregation {
  * @property bindPayload formato do payload do BIND/LOGIN.
  * @property bindUserId userId usado quando [bindPayload] é [BindPayloadKind.USER_ID].
  * @property stepsAggregation como somar as amostras de passos de um dia.
- * @property historyRetentionDays quantos dias de amostras a sessão mantém no `SampleStore`.
+ * @property historyRetentionDays quantos dias de amostras a sessão mantém no `SampleStore`. A poda depois de cada
+ * sync usa esta janela, e a mescla de passos já descarta amostras mais velhas que ela ou do futuro (dia depois de
+ * hoje e mais de 3 h à frente de agora).
  */
 public data class Quirks(
 	val requestMtu: Int,

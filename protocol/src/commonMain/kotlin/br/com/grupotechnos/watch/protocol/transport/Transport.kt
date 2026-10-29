@@ -13,10 +13,24 @@ package br.com.grupotechnos.watch.protocol.transport
  * - Toda operação com `requestId` termina com exatamente um evento com o mesmo `requestId`, com sucesso ou com erro.
  * - UUIDs chegam sempre normalizados por [GattUuid.normalize].
  * - Pode ser chamada de qualquer thread; o host faz o despacho para a thread do Bluetooth.
+ * - Ciclo de vida do link (`docs/arquitetura.md`, seção 5): um `onDisconnected` por [disconnect] quando havia link
+ *   aberto ou conexão pendente, nenhum quando não havia (`docs/decisoes.md`, ADR 12).
+ * - **Bluetooth desligado (contrato B, ADR 18).** O host entrega `onBluetoothStateChanged(false)` e **nenhum**
+ *   `onDisconnected` pelos links abertos e conexões pendentes que o desligamento derrubou, nem antes nem depois.
+ *   Depois disso, [disconnect] não emite nada até um novo [connect]. Um `onDisconnected` que o host já tinha entregado
+ *   antes do `onBluetoothStateChanged(false)` (o stack reportou a queda antes do aviso) é uma queda comum, tratada
+ *   como sempre. É o que o `CoreBluetooth` faz (`poweredOff` sem `didDisconnectPeripheral`); no Android, o host
+ *   precisa suprimir os `onDisconnected` que o `BluetoothGatt` entrega ao desligar.
  */
 public interface Transport {
 	/**
 	 * Abre o link com o relógio.
+	 *
+	 * Termina com `onConnected` ou, se falhar sem chegar a conectar, com exatamente um `onDisconnected`: a conexão
+	 * direta que falha e o `connect` que o host recusa na hora (Bluetooth desligado, sem permissão, endereço inválido).
+	 * Só a conexão pendente (`autoReconnect = true`) que falha antes de conectar pode ficar sem evento, porque o host a
+	 * mantém até o relógio voltar ou até um [disconnect]. Sem esse evento, a reconexão, que não tem timeout, ficaria
+	 * presa (`docs/arquitetura.md`, seção 5).
 	 *
 	 * @param address MAC no Android, UUID do periférico no iOS.
 	 * @param autoReconnect `false` no primeiro pareamento (conexão direta, rápida); `true` em reconexão,
@@ -32,6 +46,10 @@ public interface Transport {
 	 * Termina com exatamente um `onDisconnected` quando havia link aberto ou conexão pendente, e com nenhum quando não
 	 * havia. A sessão conta essas respostas para não confundi-las com a queda de uma conexão nova
 	 * (`docs/decisoes.md`, ADR 12).
+	 *
+	 * Depois de um `onBluetoothStateChanged(false)`, nada está aberto nem pendente: `disconnect` não emite nada até o
+	 * próximo [connect] (contrato B, ADR 18). A sessão ainda chama `disconnect` nesse momento, só para o host liberar o
+	 * que for dele (no Android, fechar o `BluetoothGatt`), e não espera resposta.
 	 */
 	public fun disconnect()
 

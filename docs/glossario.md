@@ -10,14 +10,15 @@ Termos usados no código, nos KDocs e nos outros documentos. Quando o termo tem 
 | **GATT** | Generic Attribute Profile: o relógio expõe **serviços**, cada um com **characteristics** identificadas por UUID. O telefone escreve numa characteristic e recebe notificações de outra. |
 | **ATT** | Attribute Protocol, a camada abaixo do GATT. Cada operação GATT vira um pacote ATT; o cabeçalho ATT de uma escrita ocupa 3 bytes do MTU. |
 | **UUID curto / longo** | Serviços padrão do Bluetooth têm forma curta (`FF60`) dentro da base `0000xxxx-0000-1000-8000-00805f9b34fb`. A biblioteca compara sempre a forma de 128 bits em minúsculas (`GattUuid.normalize`). |
-| **MTU** | Maximum Transmission Unit do ATT. Sem negociação vale 23, o que deixa 20 bytes úteis por escrita. A sessão pede `Quirks.requestMtu` (247) e cai para 23 se o host não responder (`docs/decisoes.md`, ADR 5). |
+| **MTU** | Maximum Transmission Unit do ATT. Sem negociação vale 23, o que deixa 20 bytes úteis por escrita. A sessão pede `Quirks.requestMtu` (247) e cai para 23 se o host não responder (`docs/decisoes.md`, ADR 5). Com o fitGPS 0.2.1 no Android, a negociação devolveu 23 com status 0. |
 | **CCCD** | Client Characteristic Configuration Descriptor (`0x2902`). Escrever `01 00` nele liga as notificações da characteristic; no Android o host faz isso dentro de `Transport.enableNotifications`. |
 | **Notify / notificação** | Mensagem que o relógio manda sem pedido, numa characteristic com notificações ligadas. Não tem confirmação na camada ATT. Cada notificação chega à sessão por `TransportEvents.onNotification`. |
 | **Indication** | Como a notificação, mas confirmada pelo telefone na camada ATT. O SMA não usa; o `hci2jsonl.py` aceita as duas. |
 | **Write request** | Escrita ATT com confirmação do relógio (`WriteType.WITH_RESPONSE`). É o que o driver SMA usa em todo frame. |
 | **Write command** | Escrita ATT sem confirmação (`WriteType.WITHOUT_RESPONSE`). |
-| **NUS** | Nordic UART Service, `6e400001-…` (write `6e400002`, notify `6e400003`). É o serviço que o Core iOS usa com o fitGPS. |
-| **FF60 ("ROUND")** | Serviço próprio da SMA (write `FF61`, notify `FF62`). A SDK Android prefere este quando existe; não se sabe ainda se o fitGPS o expõe (hipótese H6). |
+| **NUS** | Nordic UART Service, `6e400001-…` (write `6e400002`, notify `6e400003`). É o serviço que o Core iOS usa com o fitGPS e o único serviço de dados que o fitGPS 0.2.1 expõe. O relógio não o anuncia no advertising. |
+| **FF60 ("ROUND")** | Serviço próprio da SMA (write `FF61`, notify `FF62`). A SDK Android prefere este quando existe; o fitGPS 0.2.1 não o expõe (hipótese H6 refutada para esse firmware, `protocolo-sma.md`, seção 1). |
+| **Advertising / anúncio** | O pacote que o relógio transmite para ser achado no scan, com o nome e uma lista de serviços. O fitGPS 0.2.1 anuncia `Mormaii_fitGPS` e os serviços `180f`, `180a` e `00000001-…`, sem o NUS; por isso a identificação é só pelo nome (`DeviceRegistry.identify`). |
 | **GattCandidate** | Um trio serviço + write + notify que o driver sabe usar. O perfil lista os candidatos em ordem de prioridade e a sessão usa o primeiro que a descoberta encontrar inteiro. |
 | **autoConnect** | Modo de conexão do Android em que o sistema mantém uma conexão pendente até o relógio aparecer. É o `Transport.connect(autoReconnect = true)` da reconexão. |
 | **HCI snoop** | Log de todo o tráfego Bluetooth do Android (`btsnoop_hci.log`), ligado nas Opções do desenvolvedor. Aberto no Wireshark e convertido com `scripts/hci2jsonl.py` (`docs/fixtures.md`, seção 3.2). |
@@ -48,8 +49,9 @@ Termos usados no código, nos KDocs e nos outros documentos. Quando o termo tem 
 | **mode** | Byte de tipo de cada registro de histórico. Nos passos só `mode 0` vira amostra; no sono, 1/2/3 são profundo/leve/acordado e 17/34 início/fim (`sma-dados.md`). |
 | **Página / paginação** | Uma resposta de histórico traz até 20 registros; com exatamente 20, o telefone pede a mesma key de novo para receber o lote seguinte. |
 | **Cursor** | Posição do relógio no próprio histórico. A hipótese H1 é que ele avança quando o relógio recebe o nosso ACK de uma página, e H2 que os registros lidos são apagados; por isso a sessão guarda tudo no `SampleStore`. |
+| **Registro ao vivo** | O último registro de cada resposta `05/42` do fitGPS 0.2.1, carimbado no segundo do pedido, com o total acumulado da hora até ali (`sma-dados.md`, seção 6). É o que faz toda leitura de passos trazer pelo menos um registro. |
 | **Vetor dourado** | Frame de referência em hex, conferido de forma independente, que o codec tem que gerar byte a byte (`SmaFrameGoldenTest`, `protocolo-sma.md`, seção 9). |
-| **H1–H9** | Hipóteses sobre o relógio ainda não confirmadas com o fitGPS real, com o default adotado e como verificar (`protocolo-sma.md`, seção 8). |
+| **H1–H9** | Hipóteses sobre o relógio, com o default adotado, a situação depois da gravação real do fitGPS 0.2.1 (H5 provada, H6 refutada, H4 com o formato provado, H1 parcial, as outras abertas ou só sugeridas) e como fechar o que falta (`protocolo-sma.md`, seção 8; `pendencias.md`). |
 
 ## Sessão e dados
 
@@ -74,7 +76,9 @@ Termos usados no código, nos KDocs e nos outros documentos. Quando o termo tem 
 | **StepsDay** | O total de um dia local, agregado das amostras segundo `Quirks.stepsAggregation` (`HOURLY_SUM` soma as horas; `DAY_CUMULATIVE` usa o maior valor do dia). |
 | **dayKey** | Dia local no fuso do telefone, no formato `yyyy-MM-dd`. É a chave de `StepsDay`, de `SleepSession` (o dia em que a pessoa acordou) e de `confirmUploaded`. |
 | **confirmUploaded** | Marca `dayKeys` como já enviados ao backend; esses dias deixam de sair em `getStepsDays`/`getSleepSessions`. É o que o `deletedSavedData` do JavaScript alimenta. |
-| **Retenção** | `Quirks.historyRetentionDays` (30 no fitGPS): depois de cada sync, o que for mais velho sai do store. |
+| **Retenção** | `Quirks.historyRetentionDays` (30 no fitGPS): depois de cada sync, o que for mais velho sai do store. A mescla de passos também usa essa janela e descarta amostras mais velhas ou do futuro (dia depois de hoje e mais de 3 h à frente de agora; a folga é para o relógio ainda em outro fuso, ADR 16). |
+| **Contrato B** | O contrato do Bluetooth desligado (`decisoes.md`, ADR 18): o host entrega só `onBluetoothStateChanged(false)`, nenhum `onDisconnected` pelo que caiu, e `disconnect` fica mudo até um `connect` novo. A sessão não espera resposta e zera a contagem de desconexões esperadas. |
+| **Desconexão esperada** | Um `onDisconnected` que responde a um `Transport.disconnect` que a sessão pediu com link aberto ou pendente; a sessão conta essas respostas e as ignora (ADR 12). |
 | **Estimativas** | Calorias e distância calculadas a partir dos passos com as fórmulas da SDK e o usuário fixo do Core (60 kg, 173,5 cm), em `SmaEstimates`. |
 | **Exploratório** | Funciona e é testado, mas nunca foi validado com o relógio real. Hoje: o sono do fitGPS. |
 
@@ -87,7 +91,11 @@ Termos usados no código, nos KDocs e nos outros documentos. Quando o termo tem 
 | **Máscara** | O que o replay estrito ignora ao comparar um TX: o seq de todo frame e, só no `02/01`, o value (a hora muda a cada execução) e o CRC que o cobre (`TxMasker`). |
 | **TX / RX** | `FrameDirection`: TX é escrita do telefone, RX é notificação do relógio. |
 | **FrameJsonl** | O formatador do `.jsonl` (cabeçalho + uma linha por pacote), o mesmo no host e nos testes. |
-| **FakeTransport** | Host falso, síncrono e controlável, usado por todos os testes de sessão. |
+| **FakeTransport** | Host falso, síncrono e controlável, usado por todos os testes de sessão. Segue o contrato B no Bluetooth desligado. |
+| **Export cumulativo** | Cada **Export** do app de exemplo contém tudo desde o último **Clear**, então um export é prefixo exato do seguinte. Só o último vira fixture (`fixtures.md`, seção 3.1). |
+| **Linha `REPLAY`** | A linha que o `RealFixturesReplayTest` imprime por arquivo reproduzido (caminho, pacotes, TX conferidos, estado final). É a prova de que a gravação rodou. |
+| **`SmaDriver/frame`** | Linha de log em DEBUG, uma por frame de dados completo, em cada sentido: `TX seq=… cmd/key NOME len=…` e `RX seq=… cmd/key NOME len=… crc=ok` (`log/README.md`). |
+| **Pendências** | A validação no relógio que ficou para depois e os itens técnicos abertos, em `docs/pendencias.md`. |
 | **SmaWatchSimulator** | Relógio SMA simulado em nível de byte, usado pelos testes do driver e da sessão: responde BIND, LOGIN, bateria e versão por padrão, e cada teste programa as outras respostas (páginas de histórico, recusas, silêncio). |
 | **Tempo virtual** | O relógio do `kotlinx-coroutines-test`: os testes avançam 60 s de BIND sem esperar. |
 | **ADR** | Architecture Decision Record: uma entrada curta em `docs/decisoes.md` com contexto, decisão e como reverter. |

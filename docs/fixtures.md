@@ -21,8 +21,10 @@ Um objeto JSON por linha, UTF-8. A primeira linha é o cabeçalho; cada linha se
 | `firmware` | string ou `null` | versão `x.y.z` (do `02/0A`), quando conhecida |
 | `platform` | string | `android`, `ios`, `synthetic`… só informativo |
 | `mtu` | inteiro | MTU efetivo do link (23 se não foi negociado) |
-| `recordedAt` | string | início da gravação, ISO-8601 **com offset numérico**; o replay usa como hora do `WatchClock` |
+| `recordedAt` | string | início da gravação, ISO-8601 **com offset numérico**, com ou sem milissegundos (`2026-10-29T08:14:10-03:00` ou `2026-10-29T08:14:10.933-03:00`); o replay usa como hora do `WatchClock` |
 | `timeZone` | string | fuso IANA do telefone durante a gravação; o replay usa como fuso do `WatchClock` |
+
+O `FrameRecorder` do app de exemplo passa a escrever `recordedAt` com o padrão `yyyy-MM-dd'T'HH:mm:ss.SSSxxx` (o offset zero sai `+00:00`, nunca `Z`). Os exports anteriores truncavam no segundo: na fixture real o `recordedAt` é 08:14:10 e o primeiro pacote saiu às 08:14:10,933. O leitor aceita os dois formatos (`RecordingLoaderTest`).
 
 **Pacote**
 
@@ -45,19 +47,25 @@ fixtures/
 
 - `<perfil>` é o `DeviceProfile.id` (`fitgps`); `<firmware>` é o `02/0A` lido no relógio; `<cenário>` diz o que foi feito, em kebab-case (`pair-sync`, `reconnect-battery`, `forget`).
 - Um cenário por arquivo. Não editar à mão: se algo precisar sair, regrave.
-- Todo `.jsonl` em `fixtures/real/` (qualquer profundidade) vira teste automaticamente (`RealFixturesReplayTest`); não é preciso escrever código.
+- Todo `.jsonl` em `fixtures/real/` (qualquer profundidade) vira teste automaticamente (`RealFixturesReplayTest`); não é preciso escrever código. A pasta `fixtures/` é input de toda tarefa `Test` do Gradle (`protocol/build.gradle.kts`): acrescentar, trocar ou renomear uma gravação roda os testes de novo, em vez de deixá-los `UP-TO-DATE` ou `FROM-CACHE`.
+- Cada arquivo reproduzido imprime uma linha no stdout do teste, que fica no relatório XML (`protocol/build/test-results/jvmTest/TEST-…RealFixturesReplayTest.xml`): `REPLAY real/fitgps/0.2.1/pair-commands-bt-reconnect-sync.jsonl: 850 packets, TX matched 167/167, final state READY`. Sem essa linha, a gravação não rodou.
 
 ## 3. Como gravar
 
 ### 3.1 Pelo app de exemplo (FrameRecorder)
 
-O host recebe cada pacote em `WatchLogger.frame` e pode gravá-lo com `FrameJsonl.line`; o app de exemplo do `react-native-technos-core-next` faz isso no `RingLogger`/`FrameRecorder` e grava o arquivo pela aba **Log → Export** (`frames-<carimbo>.jsonl` em `Android/data/<app>/files/corenext/`, copiado com `adb pull`; o **Share** manda só as últimas entradas do log como texto). Implementação e detalhes no Repo 2.
+O host recebe cada pacote em `WatchLogger.frame` (uma chamada por pacote, só do link da sessão; uma notificação que a sessão descarta por não ter link fica só no log, em DEBUG `Session/onNotification`, e não entra na gravação) e pode gravá-lo com `FrameJsonl.line`; o app de exemplo do `react-native-technos-core-next` faz isso no `RingLogger`/`FrameRecorder` e grava o arquivo pela aba **Log → Export** (`frames-<carimbo>.jsonl` em `Android/data/<app>/files/corenext/`, copiado com `adb pull`; o **Share** manda só as últimas entradas do log como texto). Implementação e detalhes no Repo 2. As linhas `SmaDriver/frame` do log, uma por frame remontado (`log/README.md`), são só diagnóstico e não entram na gravação.
 
 Para a gravação reproduzir sem ajustes:
 1. Comece a gravar antes de tocar no relógio na lista do scan (o cabeçalho precisa da hora e do fuso do início).
-2. Depois que o estado chegar em `connected`, **espere 3 s** antes do primeiro comando: é o `postLoginDelayMs`, depois do qual a sessão manda o acerto de hora automático. O replay assume que ele vem logo depois do LOGIN.
+2. Depois que o estado chegar em `connected`, **espere 3 s** antes do primeiro comando: é o `postLoginDelayMs`, depois do qual a sessão manda o acerto de hora automático. O replay assume que ele vem logo depois do LOGIN (também depois de uma reconexão).
 3. Faça um comando de cada vez, esperando o resultado na tela.
-4. Exporte e copie para `fixtures/real/fitgps/<firmware>/<cenário>.jsonl`.
+4. Exporte e copie para `fixtures/real/fitgps/<firmware>/<cenário>.jsonl`. Basta isso: `./gradlew :protocol:jvmTest` reproduz o arquivo e imprime a linha `REPLAY` (seção 2).
+
+**Cuidados com o export**
+- **Os exports são cumulativos.** O recorder guarda tudo desde o último **Clear**, então cada export contém o anterior como prefixo exato (`frames-20261029-082857.jsonl`, 84 linhas, é o começo de `frames-20261029-083254.jsonl`, 851 linhas). Versione só o último export de cada sessão de gravação; dois arquivos com o mesmo começo viram dois testes da mesma conversa. Para um cenário por arquivo, faça **Export** e depois **Clear** entre um cenário e o outro (o Clear apaga o recorder).
+- **`logs-*.jsonl` nunca entram no repositório.** O log nativo traz o MAC do relógio (scan, `openGatt`, `reconnectIfPaired`). Ele é a fonte do que a fixture não tem (descoberta de serviços, MTU, eventos de Bluetooth) e fica fora do git; os documentos citam o `ts` dele.
+- **Confira o `frames-*.jsonl` antes de versionar**: ele não deve ter MAC. O formato só grava `type`, `dir`, `atMs`, `characteristic` e `hex`, mas um payload poderia carregar o endereço. A conferência da fixture real procurou o MAC do log no arquivo em três formas (com `:`, hex contínuo e hex com os bytes invertidos) e não achou nenhuma.
 
 ### 3.2 Por HCI snoop do Android (qualquer app, inclusive o Mormaii atual)
 
@@ -112,7 +120,13 @@ Tudo o mais (CRC dos outros frames, cmd, key, tamanho, payload de BIND/LOGIN, or
 | `05/41`… (páginas), seguidos ou não de `05/45`… | `syncHistory([STEPS])` ou `syncHistory([STEPS, SLEEP])` (um `refreshSteps` gera os mesmos bytes) |
 | `05/45`… sozinho | `syncHistory([SLEEP])` |
 | `03/05` | `disconnect(forget = true)` |
+| `03/03` no meio do arquivo | Bluetooth desligado e religado no `FakeTransport` (mudo no desligamento, contrato B, `decisoes.md`, ADR 18), seguido de `reconnect`, como o `CoreGraph.reconnectIfPaired` do Repo 2 faz quando o Bluetooth volta. Os `03/03` seguidos e o primeiro `02/01` depois deles são o handshake e o acerto de hora automático. Uma queda com reconexão automática, ou um `disconnect` seguido de "Reconnect last", geram os mesmos bytes e reproduzem igual |
+| `03/01` no meio do arquivo | `pair` de novo (depois de um Forget), com o handshake e o acerto de hora que vêm junto |
 | qualquer outro | o teste falha dizendo qual `cmd/key` a sessão não sabe pedir |
+
+**Fim de uma leitura de histórico.** Uma sequência de `05/41` (ou de `05/45`) termina na primeira página de resposta com menos de 20 registros, a mesma regra do `SmaDriver.readPages`: o tamanho do value da resposta gravada (`05/42` ou `05/46`, remontada pelo mesmo `SmaReassembler` da sessão) dividido pelo tamanho do registro (8 ou 7). Assim dois "Refresh steps" seguidos viram duas ações, e uma leitura de 64 páginas de sono vira uma só.
+
+**MTU.** O `FakeTransport` responde ao pedido de MTU com o `mtu` do cabeçalho da gravação, e não com 247. Num link de 23 a sessão corta o BIND de 45 bytes em 20 + 20 + 5, e só assim os TX batem com uma gravação feita no Android, que negociou 23 com o fitGPS.
 
 Uma gravação real passa quando: nenhuma divergência, todos os TX consumidos, todos os pedidos com terminal de sucesso e estado final `READY` (ou `DISCONNECTED`, se termina com `forget`).
 
@@ -134,6 +148,11 @@ Uma gravação real passa quando: nenhuma divergência, todos os TX consumidos, 
 - A saída esperada foi gerada pelo script e conferida à mão (2 TX, 3 RX, `atMs` 0/40/80/100/150, `recordedAt` `2026-10-28T14:30:00-03:00`). `Hci2JsonlTest` roda o script (se houver `python3`) e compara com ela, e também a lê com o `RecordingLoader`.
 - Para rodar à mão: `python3 -I scripts/hci2jsonl.py fixtures/tools/sample-wireshark.json | diff - fixtures/tools/sample-wireshark.expected.jsonl`.
 
-### `real/`
+### `real/fitgps/0.2.1/pair-commands-bt-reconnect-sync.jsonl`
 
-Vazia até a primeira gravação com o fitGPS (etapa E3/E4 do plano).
+- **Origem**: o export `frames-20261029-083254.jsonl` do app de exemplo do `react-native-technos-core-next`, copiado sem edição. FitGPS com firmware 0.2.1, telefone Android, 2026-10-29. O export anterior da mesma sessão (`frames-20261029-082857.jsonl`) é prefixo exato deste e não foi versionado; o log nativo (`logs-*.jsonl`) também não, porque tem o MAC.
+- **Conferência de MAC**: o MAC do log não aparece no arquivo em nenhuma das três formas (seção 3.1).
+- **Cabeçalho**: `Mormaii_fitGPS`, firmware `0.2.1`, `platform` `android`, MTU 23, `2026-10-29T08:14:10-03:00` (truncado no segundo; o primeiro pacote saiu 933 ms depois), `America/Sao_Paulo`.
+- **Conteúdo**: 850 pacotes (167 TX, 683 RX), todos de no máximo 20 bytes, nas characteristics `6e400002`/`6e400003` do NUS; 161 frames de dados, nenhum CRC errado, nenhum NACK, nenhuma retransmissão.
+- **Conversa**, com as 15 ações que o `ReplayScenario` deduz: conexão 1 (`atMs` 0 a 123713) com BIND + LOGIN `ANDROID_FF` e o acerto de hora automático, `syncHistory([STEPS])`, `readDeviceInfo` duas vezes, `readBattery`, `syncHistory([STEPS])` duas vezes; Bluetooth desligado por cerca de 230 s; conexão 2 (`atMs` 739559 a 1090678) com só LOGIN e o acerto de hora automático, `readDeviceInfo` duas vezes, `readBattery`, `syncHistory([STEPS])`, `setTime`, `syncHistory([STEPS])` e `syncHistory([STEPS, SLEEP])` com 64 páginas de sono. No app, as cinco leituras só de passos foram "Refresh steps" (pedidos #2, #6, #7, #12 e #14 no log), que gera os mesmos bytes de `syncHistory([STEPS])`; a última (#15) foi um Sync completo.
+- **Replay**: `850 packets, TX matched 167/167, final state READY`, todos os pedidos com terminal de sucesso. O que a gravação provou sobre o relógio está em `protocolo-sma.md` (seções 1, 4, 7 e a tabela H1–H9 da seção 8), `sma-dados.md` (seção 6) e `decisoes.md` (ADRs 4, 5, 6 e 18).

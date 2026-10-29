@@ -8,7 +8,8 @@ import kotlinx.datetime.Instant
 /**
  * Cabeçalho de uma gravação `.jsonl` (`docs/fixtures.md`, formato; mesmo conteúdo de `FrameJsonl.header`).
  *
- * @property recordedAt início da gravação, ISO-8601 com offset; o replay usa como hora do [TestClock].
+ * @property recordedAt início da gravação, ISO-8601 com offset, com ou sem milissegundos
+ * (`2026-10-29T08:14:10.933-03:00`); o replay usa como hora do [TestClock].
  * @property timeZone fuso IANA do telefone durante a gravação.
  */
 internal data class RecordingHeader(

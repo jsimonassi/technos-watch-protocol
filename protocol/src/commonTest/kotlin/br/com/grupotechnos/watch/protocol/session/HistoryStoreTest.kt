@@ -3,6 +3,7 @@ package br.com.grupotechnos.watch.protocol.session
 import br.com.grupotechnos.watch.protocol.domain.DataKind
 import br.com.grupotechnos.watch.protocol.domain.SleepSession
 import br.com.grupotechnos.watch.protocol.domain.StepsSample
+import br.com.grupotechnos.watch.protocol.log.LogLevel
 import br.com.grupotechnos.watch.protocol.profile.StepsAggregation
 import br.com.grupotechnos.watch.protocol.testing.SessionTestLogger
 import br.com.grupotechnos.watch.protocol.testing.TestClock
@@ -14,6 +15,9 @@ import kotlin.test.assertTrue
 
 class HistoryStoreTest {
 	private val zone = "America/Sao_Paulo"
+
+	/** `historyRetentionDays` do fitGPS. */
+	private val retentionDays = 30
 
 	private fun at(day: Int, hour: Int) = TimeFormat.fromLocalWallClock(LocalDateTime(2026, 10, day, hour, 0, 0), zone)
 
@@ -57,12 +61,39 @@ class HistoryStoreTest {
 	fun mergeReplacesByInstantAndPersists() {
 		val store = InMemorySampleStore()
 		val history = HistoryStore(store, TestClock.at(NOW_ISO), SessionTestLogger())
-		assertEquals(2, history.mergeSteps(listOf(sample(28, 8, 100), sample(28, 9, 200))))
+		assertEquals(2, history.mergeSteps(listOf(sample(28, 8, 100), sample(28, 9, 200)), retentionDays))
 		val snapshot = history.stepsSnapshot()
-		assertEquals(1, history.mergeSteps(listOf(sample(28, 9, 250), sample(28, 8, 100))))
+		assertEquals(1, history.mergeSteps(listOf(sample(28, 9, 250), sample(28, 8, 100)), retentionDays))
 		assertEquals(listOf(100, 250), store.loadSteps().map { it.steps })
 		// O instantâneo antigo não muda: quem estava lendo continua vendo uma lista inteira.
 		assertEquals(listOf(100, 200), snapshot.map { it.steps })
+	}
+
+	@Test
+	fun mergeDropsSamplesAfterTodayAndBeforeTheRetentionWindow() {
+		// Agora é 2026-10-28 14:30 em São Paulo; com 30 dias de retenção, o dia mais velho mantido é 2026-09-28.
+		val logger = SessionTestLogger()
+		val store = InMemorySampleStore()
+		val history = HistoryStore(store, TestClock.at(NOW_ISO), logger)
+		val lateToday = sample(28, 23, 10)
+		val oldestKept = StepsSample(TimeFormat.fromLocalWallClock(LocalDateTime(2026, 9, 28, 0, 0, 0), zone), 20, 0, 2, 10.0)
+		val tomorrow = sample(29, 0, 30)
+		val farFuture = StepsSample(TimeFormat.fromLocalWallClock(LocalDateTime(2063, 1, 1, 8, 0, 0), zone), 40, 0, 4, 20.0)
+		val tooOld = StepsSample(TimeFormat.fromLocalWallClock(LocalDateTime(2026, 9, 27, 23, 0, 0), zone), 50, 0, 5, 25.0)
+		assertEquals(2, history.mergeSteps(listOf(lateToday, tomorrow, oldestKept, farFuture, tooOld), retentionDays))
+		assertEquals(listOf(oldestKept, lateToday), history.stepsSnapshot())
+		assertEquals(listOf(oldestKept, lateToday), store.loadSteps())
+		val logged = logger.messages.single { it.second == "Session/mergeSteps" }
+		assertEquals(LogLevel.WARN, logged.first)
+		assertEquals("dropped 3 of 5 step samples: 2 after today (2026-10-28) and more than 3 h ahead, 1 before 2026-09-28", logged.third)
+		// Amanhã nunca vira dia pendente, nem quando a data chega.
+		val later = HistoryStore(store, TestClock.at("2026-10-29T10:00:00-03:00"), SessionTestLogger())
+		assertEquals(listOf("2026-09-28", "2026-10-28"), later.stepsDays(3, StepsAggregation.HOURLY_SUM).map { it.dayKey })
+		// Só amostras velhas: INFO, porque um relógio com mais de 30 dias guardados é normal.
+		val infoLogger = SessionTestLogger()
+		val fresh = HistoryStore(InMemorySampleStore(), TestClock.at(NOW_ISO), infoLogger)
+		assertEquals(0, fresh.mergeSteps(listOf(tooOld), retentionDays))
+		assertEquals(LogLevel.INFO, infoLogger.messages.single { it.second == "Session/mergeSteps" }.first)
 	}
 
 	@Test
@@ -74,7 +105,7 @@ class HistoryStoreTest {
 			override fun saveSteps(samples: List<StepsSample>) = throw IllegalStateException("disk full")
 		}
 		val history = HistoryStore(store, TestClock.at(NOW_ISO), logger)
-		history.mergeSteps(listOf(sample(28, 8, 100)))
+		history.mergeSteps(listOf(sample(28, 8, 100)), retentionDays)
 		assertEquals(100, history.stepsDays(0, StepsAggregation.HOURLY_SUM).single().steps)
 		assertTrue(logger.contains("disk gone"))
 		assertTrue(logger.contains("disk full"))
@@ -84,7 +115,7 @@ class HistoryStoreTest {
 	fun todayIsZeroWhenThereIsNoSampleAndIgnoresConfirmation() {
 		val history = HistoryStore(InMemorySampleStore(), TestClock.at(NOW_ISO), SessionTestLogger())
 		assertEquals(0, history.today(StepsAggregation.HOURLY_SUM).steps)
-		history.mergeSteps(listOf(sample(28, 8, 100)))
+		history.mergeSteps(listOf(sample(28, 8, 100)), retentionDays)
 		history.confirm(DataKind.STEPS, listOf("2026-10-28"))
 		assertEquals(100, history.today(StepsAggregation.HOURLY_SUM).steps)
 		assertTrue(history.stepsDays(0, StepsAggregation.HOURLY_SUM).isEmpty())
@@ -95,7 +126,7 @@ class HistoryStoreTest {
 		// Seis dias sem abrir o app e o app pede 3: os dias −6 a −4 ainda não foram enviados e precisam voltar.
 		val logger = SessionTestLogger()
 		val history = HistoryStore(InMemorySampleStore(), TestClock.at(NOW_ISO), logger)
-		history.mergeSteps((22..28).map { day -> sample(day, 10, day * 10) })
+		history.mergeSteps((22..28).map { day -> sample(day, 10, day * 10) }, retentionDays)
 		history.confirm(DataKind.STEPS, listOf("2026-10-23"))
 		val days = history.stepsDays(3, StepsAggregation.HOURLY_SUM)
 		assertEquals(listOf("2026-10-22", "2026-10-24", "2026-10-25", "2026-10-26", "2026-10-27", "2026-10-28"), days.map { it.dayKey })

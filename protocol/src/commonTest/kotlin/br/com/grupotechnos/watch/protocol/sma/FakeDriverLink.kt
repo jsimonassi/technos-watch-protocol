@@ -31,11 +31,17 @@ internal class FixedWatchClock(
 internal class RecordingLogger : WatchLogger {
 	val messages = mutableListOf<Triple<LogLevel, String, String>>()
 
+	/** Chamadas de [frame]. O [FakeDriverLink] não registra pacotes, então qualquer chamada veio do driver. */
+	var frameCalls: Int = 0
+		private set
+
 	override fun log(level: LogLevel, tag: String, message: String) {
 		messages += Triple(level, tag, message)
 	}
 
-	override fun frame(direction: FrameDirection, characteristic: String, value: ByteArray, summary: String) {}
+	override fun frame(direction: FrameDirection, characteristic: String, value: ByteArray, summary: String) {
+		frameCalls++
+	}
 
 	fun contains(text: String): Boolean = messages.any { it.third.contains(text) }
 }

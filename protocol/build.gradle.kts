@@ -66,9 +66,14 @@ android {
 	}
 }
 
-// Os testes JVM leem as fixtures da pasta fixtures/ na raiz do repositório.
+// Os testes JVM leem as fixtures da pasta fixtures/ na raiz do repositório. A pasta é input de toda tarefa de teste:
+// sem isso, copiar ou trocar uma gravação em fixtures/real deixava o teste UP-TO-DATE ou FROM-CACHE (o cache está
+// ligado em gradle.properties), e o replay da gravação nova nunca rodava. O caminho relativo entra na chave, então
+// renomear uma fixture também roda os testes de novo.
 tasks.withType<Test>().configureEach {
-	systemProperty("fixtures.dir", rootProject.layout.projectDirectory.dir("fixtures").asFile.absolutePath)
+	val fixtures = rootProject.layout.projectDirectory.dir("fixtures")
+	inputs.dir(fixtures).withPropertyName("fixtures").withPathSensitivity(PathSensitivity.RELATIVE)
+	systemProperty("fixtures.dir", fixtures.asFile.absolutePath)
 }
 
 // Documentação da API pública (critério D2 do plano). Só o que é `public` entra; `internal` fica de fora

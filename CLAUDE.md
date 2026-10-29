@@ -53,7 +53,7 @@ Regras que não se negociam:
 - **Comentários** explicam o porquê (quirk do firmware, decisão de compatibilidade), nunca o quê. Toda afirmação sobre o relógio cita a fonte (`SmaManager.java:1577-1591`, `SMAService.m:1056-1061`) ou a fixture que a prova.
 - **Testes**: nomes em inglês que descrevem o comportamento (`ackIsWrittenBeforeTheResponseIsDelivered`). Codec e sessão ficam em `commonTest` (rodam em JVM, Android e iOS); o que lê arquivo fica em `jvmTest`. Tempo sempre virtual (`runTest`), nunca `Thread.sleep`.
 - **Mudou um byte do protocolo** (frame, payload, catálogo): o vetor em `SmaFrameGoldenTest` e o `docs/protocolo-sma.md` (seções 6, 7 e 9) mudam na mesma alteração, com o vetor conferido de forma independente.
-- **Fixtures**: `fixtures/real/<perfil>/<firmware>/<cenário>.jsonl`, cenário em kebab-case (`pair-sync.jsonl`); nunca editar à mão; as sintéticas só pelo gerador.
+- **Fixtures**: `fixtures/real/<perfil>/<firmware>/<cenário>.jsonl`, cenário em kebab-case (`pair-sync.jsonl`); nunca editar à mão; as sintéticas só pelo gerador. Os exports do app de exemplo são cumulativos: versione só o último. Os `logs-*.jsonl` têm o MAC do relógio e nunca entram no repositório; confira que o `frames-*.jsonl` não tem MAC antes de copiar. A prova de que uma gravação rodou é a linha `REPLAY` no relatório do `RealFixturesReplayTest`.
 - **Contrato com o host** (`transport/`, `session/WatchSession.kt`, `WatchSessionListener.kt`, `SampleStore.kt`): o `react-native-technos-core-next` depende dele; mudança de assinatura exige mudar o host junto.
 
 ## Onde está cada doc e quando atualizar
@@ -65,5 +65,7 @@ Regras que não se negociam:
 | registro de histórico, agregação de passos, analisador de sono | `docs/sma-dados.md` |
 | formato `.jsonl`, replay, script de conversão | `docs/fixtures.md` + `RecordingLoader` + `scripts/hci2jsonl.py` juntos |
 | um default que nenhuma SDK define, ou uma hipótese confirmada/derrubada por fixture real | `docs/decisoes.md` (ADR) e a tabela H1–H9 do `protocolo-sma.md` |
+| contrato com o host (`Transport`, `TransportEvents`, Bluetooth desligado) | KDoc de `Transport`/`TransportEvents`, `docs/arquitetura.md` (seção 5), `transport/README.md` e as ADRs 12 e 18 |
+| validação no relógio feita ou adiada, item técnico aberto ou fechado | `docs/pendencias.md` (marcar a caixa e registrar onde o item manda) |
 | termo novo | `docs/glossario.md` |
 | o que um pacote faz, depende ou garante | o `README.md` do pacote |

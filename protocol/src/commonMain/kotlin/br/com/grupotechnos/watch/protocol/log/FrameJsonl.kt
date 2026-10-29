@@ -19,7 +19,8 @@ public object FrameJsonl {
 	/**
 	 * Linha de cabeçalho.
 	 *
-	 * @param recordedAtIso instante do início da gravação em ISO-8601 com offset; o replay usa como relógio.
+	 * @param recordedAtIso instante do início da gravação em ISO-8601 com offset, com ou sem milissegundos
+	 * (`2026-10-29T08:14:10.933-03:00`); o replay usa como relógio.
 	 * @param timeZoneId fuso do telefone durante a gravação (ex.: `"America/Sao_Paulo"`).
 	 */
 	public fun header(

@@ -16,8 +16,8 @@ aqui. A API não usa `suspend`, `Flow` nem tipos do `kotlinx-datetime`, para o S
 (a tarefa `checkObjcHeader` confere o header gerado).
 
 Documentação de desenho no repositório: `docs/arquitetura.md` (camadas, threading, máquina de estados, erros),
-`docs/protocolo-sma.md` (protocolo byte a byte), `docs/sma-dados.md`, `docs/fixtures.md`, `docs/decisoes.md` e
-`docs/glossario.md`.
+`docs/protocolo-sma.md` (protocolo byte a byte), `docs/sma-dados.md`, `docs/fixtures.md`, `docs/decisoes.md`,
+`docs/pendencias.md` (validação no relógio que ficou para depois) e `docs/glossario.md`.
 
 # Package br.com.grupotechnos.watch.protocol.domain
 

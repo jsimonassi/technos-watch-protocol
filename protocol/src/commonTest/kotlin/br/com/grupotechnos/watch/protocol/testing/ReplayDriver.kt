@@ -33,6 +33,13 @@ internal class ReplayDriver(
 	/** Divergências encontradas, já descritas para a mensagem do teste. */
 	val mismatches = mutableListOf<String>()
 
+	/** TX gravados que a sessão escreveu iguais ao gravado (depois da máscara; fora do modo estrito, só na ordem). */
+	var matchedTx: Int = 0
+		private set
+
+	/** Total de TX da gravação. */
+	val recordedTx: Int = recording.packets.count { it.direction == FrameDirection.TX }
+
 	/** Pacotes da gravação ainda não consumidos. */
 	val remaining: List<RecordedPacket>
 		get() = recording.packets.drop(index)
@@ -56,9 +63,13 @@ internal class ReplayDriver(
 		if (strict) {
 			val want = expectedMasker.mask(expected.value)
 			val got = actualMasker.mask(value)
-			if (!want.contentEquals(got)) {
+			if (want.contentEquals(got)) {
+				matchedTx++
+			} else {
 				mismatches += "TX #${txCount()} differs in ${recording.source}\n  recorded ${Hex.encode(expected.value)}\n  sent     ${Hex.encode(value)}"
 			}
+		} else {
+			matchedTx++
 		}
 		emitRxUntilNextTx()
 	}

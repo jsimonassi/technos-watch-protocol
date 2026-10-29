@@ -67,6 +67,29 @@ class WatchSessionLifecycleTest {
 	}
 
 	@Test
+	fun droppedNotificationsGoToTheLogButNeverToTheRecording() = runSession { h ->
+		h.pairReady()
+		val recorded = h.logger.frames.size
+		// Outra characteristic com o link aberto, e a characteristic certa depois que a conexão acabou.
+		h.transport.events.onNotification(Profiles.SMA_ROUND.notify, byteArrayOf(0xAB.toByte(), 0x10, 0, 0, 0, 0, 0, 7))
+		h.run()
+		h.session.disconnect(2, forget = false)
+		h.run()
+		h.transport.events.onNotification(Profiles.SMA_NUS.notify, byteArrayOf(0xAB.toByte(), 0x10, 0, 0, 0, 0, 0, 8))
+		h.run()
+		assertEquals(recorded, h.logger.frames.size, "recorded: ${h.logger.frames.drop(recorded)}")
+		assertEquals(
+			listOf(
+				"notification on ${Profiles.SMA_ROUND.notify} without a matching link; dropped AB10000000000007",
+				"notification on ${Profiles.SMA_NUS.notify} without a matching link; dropped AB10000000000008",
+			),
+			h.logger.withTag("Session/onNotification"),
+		)
+		h.assertNoUnexpectedErrors()
+		h.session.close()
+	}
+
+	@Test
 	fun ff60IsPreferredOverNusWhenBothExist() = runSession { h ->
 		h.transport.services = listOf(FakeTransport.serviceOf(Profiles.SMA_NUS), FakeTransport.serviceOf(Profiles.SMA_ROUND))
 		h.transport.notifyCharacteristic = Profiles.SMA_ROUND.notify

@@ -19,8 +19,11 @@ import br.com.grupotechnos.watch.protocol.transport.WriteType
  *   gravação e emite os RX gravados.
  *
  * Controle do link pelo teste: [connectBehavior] decide se `connect` abre o link na hora; [completeConnect],
- * [dropLink] e [setBluetooth] simulam eventos do lado do host. `disconnect` responde `onDisconnected` só quando havia
- * link aberto ou conexão pendente, que é o contrato que a sessão assume (`docs/arquitetura.md`).
+ * [dropLink] e [setBluetooth] simulam eventos do lado do host. É o contrato que a sessão assume
+ * (`docs/arquitetura.md`, seção 5):
+ * - `disconnect` responde um `onDisconnected` só quando havia link aberto ou conexão pendente (ADR 12);
+ * - Bluetooth desligado segue o contrato B (ADR 18): só `onBluetoothStateChanged(false)`, nenhum `onDisconnected`
+ *   pelo que caiu, e `disconnect` fica mudo até o próximo `connect`. O host do iOS (`CoreBluetooth`) se comporta assim.
  */
 internal class FakeTransport(
 	/** Serviços devolvidos na descoberta; o padrão é só o NUS, como o fitGPS no iOS (`SMAService.m:1056-1061`). */
@@ -135,7 +138,12 @@ internal class FakeTransport(
 		events.onDisconnected(status, message)
 	}
 
-	/** O Bluetooth do telefone foi ligado ou desligado; desligar derruba link e conexão pendente sem `onDisconnected`. */
+	/**
+	 * O Bluetooth do telefone foi ligado ou desligado. Desligar derruba o link e a conexão pendente sem nenhum
+	 * `onDisconnected`, nem antes nem depois (contrato B, `docs/decisoes.md`, ADR 18); como nada fica aberto, um
+	 * `disconnect` seguinte também não responde, até o próximo `connect`. Para simular o stack que reporta a queda antes
+	 * do aviso de Bluetooth desligado, o teste chama [dropLink] antes deste método.
+	 */
 	fun setBluetooth(enabled: Boolean) {
 		if (!enabled) {
 			linkOpen = false

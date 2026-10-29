@@ -40,7 +40,9 @@ public interface WatchLogger {
 	/**
 	 * Um pacote GATT cru, exatamente como foi escrito ou notificado (um fragmento, não um frame remontado).
 	 *
-	 * É a fonte para gravar fixtures: o host pode repassar estes pacotes para [FrameJsonl.line].
+	 * É a fonte para gravar fixtures: o host pode repassar estes pacotes para [FrameJsonl.line]. Chega uma vez por
+	 * pacote de uma conexão da sessão; uma notificação que a sessão descarta por não ter conexão para recebê-la (depois
+	 * do fim da conexão ou em outra characteristic) vai só para [log], em DEBUG.
 	 *
 	 * @param characteristic UUID normalizado da characteristic.
 	 * @param summary descrição legível dada pelo driver (ex.: `"seq=3 02/01 SET_TIME len=4 crc=ok"`),

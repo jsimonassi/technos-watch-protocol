@@ -78,6 +78,9 @@ import kotlin.time.TimeSource
  * **Concorrência.** Pensado para rodar no dispatcher de paralelismo 1 da sessão; o estado compartilhado entre a
  * corrotina de recepção e os pedidos é `@Volatile` e as esperas usam [CompletableDeferred].
  *
+ * **Log.** Uma linha `SmaDriver/frame` em DEBUG por frame de dados completo em cada sentido ([logFrame]), pelo
+ * `WatchLogger.log`. O driver nunca chama `WatchLogger.frame`: os pacotes crus saem uma vez só, pelo link da sessão.
+ *
  * @param nowMs relógio monotônico em milissegundos para o intervalo entre fragmentos; os testes passam o tempo
  * virtual do `TestCoroutineScheduler`.
  */
@@ -312,6 +315,7 @@ internal class SmaDriver(
 		val request = PendingRequest(command.cmd, command.responseKey, seq)
 		pending = request
 		try {
+			logFrame("TX seq=$seq ${SmaCommand.label(command.cmd, command.key)} len=${value.size}")
 			sendFrame(bytes)
 			val acked = withTimeoutOrNull(quirks.commandTimeoutMs) { request.acked.await() }
 				?: return Outcome.Failure(timeout("No ACK for $label after ${quirks.commandTimeoutMs} ms"), retryable = true)
@@ -366,8 +370,10 @@ internal class SmaDriver(
 			when (event) {
 				is SmaReassemblyEvent.Control -> onControl(event)
 				is SmaReassemblyEvent.Frame -> {
-					writeControl(SmaFrameCodec.ack(event.frame.sequence))
-					dispatch(event.frame)
+					val frame = event.frame
+					logFrame("RX seq=${frame.sequence} ${SmaCommand.label(frame.cmd, frame.key)} len=${frame.value.size} crc=ok")
+					writeControl(SmaFrameCodec.ack(frame.sequence))
+					dispatch(frame)
 				}
 				is SmaReassemblyEvent.Corrupted -> {
 					log(LogLevel.WARN, "receive", "corrupted frame (${event.error}): ${event.detail}; raw=${Hex.encode(event.raw)}")
@@ -455,6 +461,17 @@ internal class SmaDriver(
 
 	private fun log(level: LogLevel, method: String, message: String) {
 		link.logger.log(level, "SmaDriver/$method", message)
+	}
+
+	/**
+	 * Uma linha `SmaDriver/frame` em DEBUG por frame de dados completo, nos dois sentidos (ACK/NACK ficam de fora):
+	 * `TX seq=<n> <cmd/key NOME> len=<value>` antes de escrever os fragmentos e `RX seq=<n> <cmd/key NOME> len=<value>
+	 * crc=ok` depois de remontar, antes do ACK. Os pacotes crus continuam saindo só em `WatchLogger.frame`, pelo
+	 * `DriverLink`, uma vez cada: é de lá que o host grava a fixture, e chamar `frame` aqui duplicaria os pacotes da
+	 * gravação. A linha existe porque o RX cru só traz o resumo no primeiro fragmento (o L1), sem `cmd/key` nem CRC.
+	 */
+	private fun logFrame(message: String) {
+		log(LogLevel.DEBUG, "frame", message)
 	}
 
 	/** Pedido em andamento: espera de ACK (`true` = ACK, `false` = NACK) e, nos GETs, da resposta `key + 1`. */

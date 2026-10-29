@@ -14,7 +14,7 @@
 | `SmaUserInfoCodec` | perfil em uint32 (`02/10`, só codec) |
 | `SmaVersionPayload`, `SmaBatteryPayload`, `SmaUnbindPayload` | respostas `02/0B`, `02/09` e value do `03/05` |
 
-**Status na PoC.** Enviados: `03/01`, `03/03`, `03/05`, `02/01`, `02/08`, `02/0A`, `05/41`, `05/45`. Avisos tratados: `02/70`, `04/62`. Só codec: `02/68`, `02/10`. Catalogado e não enviado: `02/6F` (payload desconhecido nas duas SDKs).
+**Status na PoC.** Enviados: `03/01`, `03/03`, `03/05`, `02/01`, `02/08`, `02/0A`, `05/41`, `05/45`. Avisos tratados: `02/70`, `04/62` (nenhum dos dois apareceu na gravação real do fitGPS 0.2.1). `02/0B` do fitGPS 0.2.1 tem 3 bytes, sem versão BLE: `SmaVersionPayload` devolve `bleVersion = null`. Só codec: `02/68`, `02/10`. Catalogado e não enviado: `02/6F` (payload desconhecido nas duas SDKs).
 
 **Fica de fora.** Envio, espera e retentativa (`SmaDriver`); registros de histórico (`data/`).
 

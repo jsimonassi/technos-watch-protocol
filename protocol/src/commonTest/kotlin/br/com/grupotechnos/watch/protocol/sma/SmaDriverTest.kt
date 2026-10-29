@@ -4,6 +4,7 @@ import br.com.grupotechnos.watch.protocol.domain.WatchErrorCodes
 import br.com.grupotechnos.watch.protocol.domain.WatchException
 import br.com.grupotechnos.watch.protocol.driver.DriverNotice
 import br.com.grupotechnos.watch.protocol.driver.HandshakeMode
+import br.com.grupotechnos.watch.protocol.log.LogLevel
 import br.com.grupotechnos.watch.protocol.profile.BindPayloadKind
 import br.com.grupotechnos.watch.protocol.sma.codec.SmaFrame
 import br.com.grupotechnos.watch.protocol.sma.codec.SmaFrameCodec
@@ -554,6 +555,31 @@ class SmaDriverTest {
 		runCurrent()
 		driver.close()
 		assertTrue(first.await().isFailure)
+	}
+
+	@Test
+	fun everyDataFrameIsLoggedOnceInEachDirectionWithoutRecordingPackets() = runTest {
+		val link = FakeDriverLink()
+		link.watch.installHappyPath(battery = 42)
+		val driver = newDriver(link)
+		driver.login()
+		assertEquals(42, driver.readBattery())
+		val lines = link.logger.messages.filter { it.second == "SmaDriver/frame" }
+		// Com MTU 23 o LOGIN sai em 3 escritas e cada resposta chega em 2 notificações: uma linha por frame inteiro.
+		assertEquals(
+			listOf(
+				"TX seq=1 03/03 LOGIN len=32",
+				"RX seq=256 03/04 LOGIN_BACK len=1 crc=ok",
+				"TX seq=2 02/08 BATTERY len=0",
+				"RX seq=257 02/09 BATTERY_BACK len=1 crc=ok",
+			),
+			lines.map { it.third },
+		)
+		assertTrue(lines.all { it.first == LogLevel.DEBUG })
+		// Os ACKs dos dois lados não viram linha, e o driver nunca chama WatchLogger.frame: isso duplicaria os pacotes
+		// que o host grava na fixture.
+		assertEquals(listOf(256, 257), link.watch.phoneAcks)
+		assertEquals(0, link.logger.frameCalls)
 	}
 
 	@Test

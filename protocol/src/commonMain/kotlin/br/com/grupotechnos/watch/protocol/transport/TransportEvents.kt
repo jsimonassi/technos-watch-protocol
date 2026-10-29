@@ -60,7 +60,19 @@ public class TransportEvents internal constructor(
 		sink(TransportEvent.Notification(GattUuid.normalize(characteristic), value))
 	}
 
-	/** O Bluetooth do telefone foi ligado ou desligado. */
+	/**
+	 * O Bluetooth do telefone foi ligado ou desligado.
+	 *
+	 * **Desligado (contrato B, `docs/decisoes.md`, ADR 18).** Este é o único evento: o host **não** chama
+	 * [onDisconnected] pelos links abertos nem pelas conexões pendentes que o desligamento derrubou, nem antes nem
+	 * depois, e um `Transport.disconnect` seguinte também não responde até um `Transport.connect` novo. A sessão
+	 * derruba a tentativa, vai para `BLUETOOTH_OFF` e não espera nenhum `onDisconnected`. Um [onDisconnected] entregue
+	 * antes deste evento (o stack reportou a queda antes do aviso de Bluetooth desligado) é uma queda comum; um
+	 * entregue depois só gera um aviso no log, mas, se chegar quando o Bluetooth já voltou, a sessão o toma pela falha
+	 * da conexão nova e espera para tentar de novo.
+	 *
+	 * **Ligado.** Com relógio pareado e sem `disconnect` do usuário, a sessão reconecta sozinha (`RECONNECTING`).
+	 */
 	public fun onBluetoothStateChanged(enabled: Boolean) {
 		sink(TransportEvent.BluetoothStateChanged(enabled))
 	}

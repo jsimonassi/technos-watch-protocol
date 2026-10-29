@@ -141,6 +141,55 @@ class WatchSessionCommandsTest {
 	}
 
 	@Test
+	fun refreshStepsKeepsSamplesWithWrongDatesOutOfTheHistory() = runSession { h ->
+		h.pairReady()
+		h.sportPages += sportPage(
+			Triple(oct(28, 8), 0, 300),
+			// Relógio com a data errada: amanhã, e um dia fora dos 30 de retenção.
+			Triple(oct(29, 9), 0, 400),
+			Triple(LocalDateTime(2026, 9, 1, 10, 0, 0), 0, 500),
+		)
+		h.session.refreshSteps(2)
+		h.run()
+		assertEquals(300, (h.listener.terminal(2) as SessionEvent.LiveSteps).today.steps)
+		assertEquals(listOf(300), h.store.loadSteps().map { it.steps })
+		assertTrue(h.logger.contains("dropped 2 of 3 step samples: 1 after today (2026-10-28) and more than 3 h ahead, 1 before 2026-09-28"))
+		// Quando a data errada chega, ela não aparece como dia pendente.
+		h.clock.nowEpochMillis = at(LocalDateTime(2026, 10, 29, 12, 0, 0))
+		assertEquals(listOf("2026-10-28"), h.session.getStepsDays(3).map { it.dayKey })
+		h.session.close()
+	}
+
+	@Test
+	fun stepsFromAWatchStillInTheOldTimeZoneAreKeptAcrossMidnight(): TestResult {
+		// T6 de `docs/pendencias.md`: o telefone já está em Manaus (UTC-4), 23:30 do dia 28, e o relógio ainda em São
+		// Paulo (UTC-3), porque o acerto de hora só vem na próxima conexão. O registro ao vivo sai 00:30 do dia 29 e vira
+		// 29 00:00 em Manaus, 30 min à frente de agora: são passos reais, e o relógio não os devolve de novo (H2).
+		val manaus = "America/Manaus"
+		return runSession(clock = TestClock.at("2026-10-28T23:30:00-04:00", manaus)) { h ->
+			h.pairReady()
+			h.sportPages += sportPage(
+				Triple(oct(29, 0, 30), 0, 120),
+				// 03:30 do relógio vira 29 03:00 em Manaus, 3,5 h à frente: acima da folga, é data errada.
+				Triple(oct(29, 3, 30), 0, 900),
+			)
+			h.session.refreshSteps(2)
+			h.run()
+			assertEquals(0, (h.listener.terminal(2) as SessionEvent.LiveSteps).today.steps)
+			assertEquals(
+				listOf(TimeFormat.fromLocalWallClock(oct(29, 0), manaus)),
+				h.store.loadSteps().map { it.atEpochMillis },
+			)
+			assertTrue(h.logger.contains("dropped 1 of 2 step samples: 1 after today (2026-10-28) and more than 3 h ahead"))
+			assertTrue(h.logger.contains("kept 1 step samples after today (2026-10-28) within 3 h of now"))
+			// No dia seguinte, os passos aparecem no dia 29.
+			h.clock.nowEpochMillis = TimeFormat.fromLocalWallClock(oct(29, 12), manaus)
+			assertEquals(listOf("2026-10-29" to 120), h.session.getStepsDays(3).map { it.dayKey to it.steps })
+			h.session.close()
+		}
+	}
+
+	@Test
 	fun syncReportsProgressMergesAndReturnsToReady() = runSession { h ->
 		h.pairReady()
 		h.sportPages += sportPage(Triple(oct(28, 8), 0, 300), Triple(oct(28, 9), 0, 100))

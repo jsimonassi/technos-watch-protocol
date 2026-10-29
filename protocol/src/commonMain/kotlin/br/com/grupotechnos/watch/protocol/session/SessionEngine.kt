@@ -12,7 +12,6 @@ import br.com.grupotechnos.watch.protocol.driver.DeviceDriver
 import br.com.grupotechnos.watch.protocol.driver.DriverNotice
 import br.com.grupotechnos.watch.protocol.driver.Drivers
 import br.com.grupotechnos.watch.protocol.driver.HandshakeMode
-import br.com.grupotechnos.watch.protocol.log.FrameDirection
 import br.com.grupotechnos.watch.protocol.log.LogLevel
 import br.com.grupotechnos.watch.protocol.log.WatchLogger
 import br.com.grupotechnos.watch.protocol.profile.DeviceProfile
@@ -26,6 +25,7 @@ import br.com.grupotechnos.watch.protocol.transport.GattUuid
 import br.com.grupotechnos.watch.protocol.transport.Transport
 import br.com.grupotechnos.watch.protocol.transport.TransportEvent
 import br.com.grupotechnos.watch.protocol.transport.TransportEvents
+import br.com.grupotechnos.watch.protocol.util.Hex
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -60,7 +60,14 @@ import kotlin.coroutines.CoroutineContext
  * **Desconexões esperadas.** Quando a sessão chama `Transport.disconnect` com um link aberto ou pendente, o host
  * responde com um `onDisconnected` que chega depois, talvez quando outra tentativa já começou. [staleDisconnects]
  * conta essas respostas esperadas para não confundi-las com a queda do link novo; a contagem zera em `onConnected`,
- * porque o host é serial e entrega o `onDisconnected` antigo antes do `onConnected` novo.
+ * porque o host é serial e entrega o `onDisconnected` antigo antes do `onConnected` novo (`docs/decisoes.md`, ADR 12).
+ *
+ * **Bluetooth desligado (contrato B, ADR 18).** O host entrega `onBluetoothStateChanged(false)` e nenhum
+ * `onDisconnected` pelo que o desligamento derrubou; depois disso, `Transport.disconnect` não responde nada até um
+ * `connect` novo. Por isso o desligamento zera [staleDisconnects] e marca o transporte inativo sem contar nada
+ * ([releaseTransportOnBluetoothOff]). Contar ali faria a sessão engolir, depois de religar, a falha real da conexão
+ * pendente nova, e a reconexão (que não tem timeout) ficaria presa em `RECONNECTING`. Um `onDisconnected` que chega
+ * antes do desligamento é uma queda comum.
  *
  * **Regra do callback terminal.** Cada `requestId` recebe exatamente um terminal: pedidos de ciclo de vida
  * ([LifecycleRequest]) saem de [lifecycle] ao terminar; comandos usam [SessionCommand.markFinished]; recusas
@@ -231,8 +238,14 @@ internal class SessionEngine(
 	private fun onNotification(event: TransportEvent.Notification) {
 		val link = attempt?.link
 		if (link == null || link.isClosed || event.characteristic != link.gatt.notify) {
-			logger.frame(FrameDirection.RX, event.characteristic, event.value, "")
-			log(LogLevel.DEBUG, "onNotification", "notification on ${event.characteristic} without a matching link; dropped")
+			// Só no log, nunca em `WatchLogger.frame`: a gravação tem só o que um link recebeu (`log/README.md`). Gravado, este
+			// pacote seria reemitido pelo replay depois do TX anterior, talvez dentro de um link vivo, e geraria um NACK que
+			// a gravação não tem.
+			log(
+				LogLevel.DEBUG,
+				"onNotification",
+				"notification on ${event.characteristic} without a matching link; dropped ${Hex.encode(event.value)}",
+			)
 			return
 		}
 		link.deliver(event.value)
@@ -390,7 +403,7 @@ internal class SessionEngine(
 				teardown(current, WatchErrorCodes.DISCONNECTED, "bluetooth off")
 				if (pairing) failLifecycle(WatchErrorCodes.DISCONNECTED, "bluetooth turned off")
 			}
-			disconnectTransport("bluetooth off")
+			releaseTransportOnBluetoothOff()
 			setState(ConnectionState.BLUETOOTH_OFF, "bluetooth turned off")
 			return
 		}
@@ -467,7 +480,9 @@ internal class SessionEngine(
 		val reason = "link lost (status=${event.status} ${event.message})"
 		val current = attempt
 		if (current == null) {
-			log(LogLevel.INFO, "onDisconnected", "$reason with no connection attempt (state=$state)")
+			// Não há o que derrubar, mas o evento não era esperado: é o rastro de um host que fala depois do Bluetooth
+			// desligado (fora do contrato B, ADR 18) ou de uma contagem de desconexões esperadas que se perdeu.
+			log(LogLevel.WARN, "onDisconnected", "$reason with no connection attempt (state=$state)")
 			return
 		}
 		when {
@@ -668,11 +683,27 @@ internal class SessionEngine(
 		log(LogLevel.DEBUG, "teardown", "${attempt.mode} attempt closed: $message")
 	}
 
+	/** Fecha o link ou a conexão pendente do host e conta o `onDisconnected` que vai voltar (ADR 12). */
 	private fun disconnectTransport(reason: String) {
 		if (!transportActive) return
 		transportActive = false
 		staleDisconnects++
 		log(LogLevel.DEBUG, "disconnectTransport", reason)
+		hostCall("disconnect") { transport.disconnect() }
+	}
+
+	/**
+	 * Bluetooth desligado: pelo contrato B (ADR 18), o host não entrega `onDisconnected` pelo link nem pela conexão
+	 * pendente que o desligamento derrubou, nem responde a um `disconnect` depois disso. Nenhuma resposta vai chegar,
+	 * então a contagem de desconexões esperadas zera (inclusive a de um `disconnect` anterior ainda sem resposta) e o
+	 * transporte fica inativo. O `Transport.disconnect` só deixa o host liberar o que for dele (no Android, o
+	 * `BluetoothGatt`) e não conta.
+	 */
+	private fun releaseTransportOnBluetoothOff() {
+		staleDisconnects = 0
+		if (!transportActive) return
+		transportActive = false
+		log(LogLevel.DEBUG, "disconnectTransport", "bluetooth off: releasing the host link, no onDisconnected expected")
 		hostCall("disconnect") { transport.disconnect() }
 	}
 
@@ -752,7 +783,7 @@ internal class SessionEngine(
 				succeed(command) {}
 			}
 			is SessionCommand.RefreshSteps -> {
-				syncEngine.refreshSteps(driver)
+				syncEngine.refreshSteps(driver, attempt.profile.quirks.historyRetentionDays)
 				val today = history.today(aggregation())
 				succeed(command) { it.onLiveSteps(command.requestId, today) }
 			}
