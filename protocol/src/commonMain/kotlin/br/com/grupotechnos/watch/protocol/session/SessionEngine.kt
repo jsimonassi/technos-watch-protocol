@@ -644,7 +644,8 @@ internal class SessionEngine(
 	private fun onAttemptFailed(attempt: Attempt, error: WatchException) {
 		if (!isCurrent(attempt)) return
 		if (error.code == WatchErrorCodes.PAIRING_REMOVED) {
-			// Antes da tradução do primeiro pareamento: no HANDSHAKING ela viraria HANDSHAKE_FAILED e esconderia a causa.
+			// Só a configuração lança esse código (descoberta ou CCCD com o status, em CONFIGURING); sem o desvio, a
+			// reconexão agendaria outra tentativa, que nunca passaria (ADR 23).
 			stopOnPairingRemoved(attempt, error.message)
 			return
 		}

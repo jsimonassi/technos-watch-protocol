@@ -100,13 +100,18 @@ public class CoreBridge internal constructor(
 	 * Liga o módulo JS [sink] como destino dos eventos e entrega a fila, em ordem. O host chama na primeira chamada de um
 	 * método JS de cada instância do módulo (como o `graph()` do host Android antigo); chamar de novo com o mesmo [sink]
 	 * não faz nada (não entrega a fila de novo). Um [sink] diferente substitui o anterior.
+	 *
+	 * A troca e a entrega da fila acontecem sob a mesma trava: com dois `attach` ao mesmo tempo (duas instâncias do
+	 * módulo no primeiro método JS, como no primeiro teste no iPhone, 2026-10-30), o sink da fila de eventos é sempre o
+	 * último registrado aqui. Segurar a trava ao emitir não trava nada, porque o sink não chama o controlador de volta.
 	 */
 	public fun attach(sink: CoreEventSink) {
-		val adapter = sinkLock.withLock {
+		sinkLock.withLock {
 			if (attached?.sink === sink) return
-			SinkAdapter(sink).also { attached = it }
+			val adapter = SinkAdapter(sink)
+			attached = adapter
+			events.attach(adapter)
 		}
-		events.attach(adapter)
 	}
 
 	/**
@@ -118,10 +123,12 @@ public class CoreBridge internal constructor(
 	 * usado).
 	 */
 	public fun invalidate(sink: CoreEventSink) {
-		val adapter = sinkLock.withLock {
-			attached?.takeIf { it.sink === sink }?.also { attached = null }
+		sinkLock.withLock {
+			attached?.takeIf { it.sink === sink }?.let { adapter ->
+				attached = null
+				events.detach(adapter)
+			}
 		}
-		if (adapter != null) events.detach(adapter)
 		requests.drain().forEach { it.token?.reject(WatchErrorCodes.CANCELLED, "Module invalidated") }
 	}
 
@@ -227,8 +234,9 @@ public class CoreBridge internal constructor(
 	 * antecipada, com `onError` antes); para o scan, zera o "usuário desconectou" e pede `WatchSession.pair`. Resolve
 	 * com `null` quando a sessão chega em `READY`; uma falha sai como `onError` (`method` `"pairDevice"`) e rejeita com o
 	 * código da sessão (inclusive `PAIRING_REMOVED`, que o JS mostra como "esqueça o relógio nos ajustes de Bluetooth").
-	 * O nome do relógio só vai para o cabeçalho da gravação quando o link abre (o listener, em `CONFIGURING`), e não
-	 * aqui: uma tentativa que nunca conecta não pode renomear a gravação de outro relógio.
+	 * O nome do relógio só vai para o cabeçalho da gravação quando a tentativa chega ao handshake (o listener, em
+	 * `HANDSHAKING`), e não aqui: uma tentativa que falha antes não gravou pacote e não pode renomear a gravação de outro
+	 * relógio.
 	 *
 	 * @param name `appName` (`"fitGPS"`, `"Life Ultra GPS"`: o que o app Mormaii manda), nome BLE (`"Mormaii_fitGPS"`,
 	 * `"Smart Watch 6010"`) ou `id` do perfil.
@@ -245,7 +253,7 @@ public class CoreBridge internal constructor(
 	 * `startPairingAttempt(deviceId, name)`: reconexão a um relógio já pareado. Mesmas checagens de [pairDevice], sem
 	 * parar o scan; pede `WatchSession.reconnect` e **resolve na hora** com `null` (a reconexão pode levar horas, e o JS
 	 * acompanha pelo `onConnectStateChanged`). Uma falha posterior sai só como `onError` (`method`
-	 * `"startPairingAttempt"`). Como no [pairDevice], o cabeçalho da gravação só muda quando o link abre.
+	 * `"startPairingAttempt"`). Como no [pairDevice], o cabeçalho da gravação só muda quando o handshake começa.
 	 */
 	public fun startPairingAttempt(deviceId: String, name: String, completion: CoreCompletion) {
 		val profile = checkConnectTarget(METHOD_START_PAIRING_ATTEMPT, deviceId, name, completion) ?: return
@@ -582,7 +590,7 @@ public class CoreBridge internal constructor(
 		return itemCategory to registeredAt
 	}
 
-	/** Nome do relógio no cabeçalho da gravação quando o link abre, antes de a sessão ler a identificação. */
+	/** Nome do relógio no cabeçalho da gravação quando o handshake começa, antes de a sessão ler a identificação. */
 	private fun recordingName(profile: DeviceProfile): String = profile.bleNames.firstOrNull() ?: profile.appName
 
 	/** O [CoreEventSink] do módulo como destino da [PendingEvents]. */
@@ -603,7 +611,7 @@ public class CoreBridge internal constructor(
 	 * encontrar o dado emitido. Toda falha de comando também sai como `onError`, com o nome do método JS que a originou.
 	 */
 	private inner class SessionListener : WatchSessionListener {
-		/** `perfil/endereço` do relógio que o cabeçalho da gravação nomeia; `null` até o primeiro link abrir. Só a thread da sessão usa. */
+		/** `perfil/endereço` do relógio que o cabeçalho da gravação nomeia; `null` até o primeiro handshake. Só a thread da sessão usa. */
 		private var recordedWatch: String? = null
 
 		override fun onStateChanged(state: ConnectionState, phase: String?) {
@@ -612,7 +620,7 @@ public class CoreBridge internal constructor(
 			// sessão processar o disconnect regravaria o relógio esquecido, e o próximo processo reconectaria a ele.
 			if (state == ConnectionState.READY && !userDisconnected) savePairing()
 			if (state != ConnectionState.READY && state != ConnectionState.SYNCING) stopSyncWork("state=$state")
-			if (state == ConnectionState.CONFIGURING) recordLinkedWatch()
+			if (state == ConnectionState.HANDSHAKING) recordLinkedWatch()
 			emit("onConnectStateChanged", EventMapper.connectStateChanged(state, phase))
 		}
 
@@ -673,13 +681,17 @@ public class CoreBridge internal constructor(
 		}
 
 		/**
-		 * O link da tentativa abriu (`CONFIGURING`, o primeiro estado em que algum pacote pode ser gravado): se o relógio
-		 * (perfil e endereço) não é o que o cabeçalho já nomeia, o nome passa a ser o dele e o firmware do anterior sai
-		 * (`null`) até o `onDeviceInfo` do novo. Não acontece no pedido de conexão porque uma tentativa que nunca conecta
-		 * não grava nada: no primeiro teste no iPhone (2026-10-30), os pedidos que falharam com o Life Ultra GPS
-		 * renomearam a gravação do fitGPS, que saiu com `device` `"Life Ultra GPS"` e `firmware` `"0.2.1"` (o do fitGPS).
-		 * Os pacotes de antes continuam na gravação (o host só começa outra no `clearLogs`): uma exportação tem um
-		 * cabeçalho só (`docs/fixtures.md`, seção 3.1).
+		 * A tentativa chegou ao handshake (`HANDSHAKING`; as fases repetem o estado e caem no "mesmo relógio"): se o
+		 * relógio (perfil e endereço) não é o que o cabeçalho já nomeia, o nome passa a ser o dele e o firmware do anterior
+		 * sai (`null`) até o `onDeviceInfo` do novo. É a primeira etapa que com certeza grava um pacote do relógio novo: o
+		 * handshake dos dois drivers começa com um pedido, e o link registra o TX antes de mandá-lo. Antes dela a tentativa
+		 * pode falhar sem gravar nada (pedido que nunca conecta, descoberta com erro, `GATT_NOT_SUPPORTED`, link que cai
+		 * antes dos CCCD, `PAIRING_REMOVED`), e renomear ali repetiria o erro do primeiro teste no iPhone (2026-10-30): os
+		 * pedidos que falharam com o Life Ultra GPS renomearam a gravação do fitGPS, que saiu com `device`
+		 * `"Life Ultra GPS"` e `firmware` `"0.2.1"` (o do fitGPS). Sobra um caso: uma notificação que chegue entre os CCCD
+		 * de uma tentativa que falha antes do handshake fica sob o cabeçalho anterior. Os pacotes de antes continuam na
+		 * gravação (o host só começa outra no `clearLogs`): uma exportação tem um cabeçalho só (`docs/fixtures.md`,
+		 * seção 3.1).
 		 */
 		private fun recordLinkedWatch() {
 			val profileId = session.currentProfileId ?: return

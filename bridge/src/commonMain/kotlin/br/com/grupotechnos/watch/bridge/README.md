@@ -71,12 +71,14 @@ Foundation no código comum. O `:protocol` nunca depende daqui.
   próximo `pairDevice`/`startPairingAttempt`); o `forgetDevice` apaga ao ser pedido e de novo quando a sessão conclui, se
   ninguém pediu outro pareamento no meio. A reconexão automática exige pareamento salvo, ninguém ter desconectado, sessão
   em `DISCONNECTED`/`BLUETOOTH_OFF`, Bluetooth ligado e permissão de conexão.
-- `CoreBridge`: o cabeçalho da gravação só passa a nomear um relógio quando o link dele abre (`CONFIGURING`), nunca no
-  pedido de conexão; ao trocar de relógio (perfil ou endereço), o firmware do anterior vai `null` até o `onDeviceInfo`
+- `CoreBridge`: o cabeçalho da gravação só passa a nomear um relógio quando a tentativa dele chega ao handshake
+  (`HANDSHAKING`, a primeira etapa que grava pacote), nunca no pedido de conexão nem num link que falha na configuração; ao trocar de relógio (perfil ou endereço), o firmware do anterior vai `null` até o `onDeviceInfo`
   do novo, e outro link do mesmo relógio não chama o host (ADR 24).
 - `CoreBridge`: o trabalho em segundo plano liga no `onSyncStarted` (antes do evento) e desliga uma vez, no fim do sync,
   no erro do sync ou com a sessão fora de `READY`/`SYNCING`; o erro de outro pedido não o desliga.
-- `CoreBridge`: o `attach` do mesmo `CoreEventSink` não entrega a fila de novo; o `invalidate` rejeita com `CANCELLED`
+- `CoreBridge`: o `attach` do mesmo `CoreEventSink` não entrega a fila de novo; o `attach` e o `invalidate` trocam o sink
+  registrado e o da fila de eventos sob a mesma trava (dois `attach` ao mesmo tempo nunca deixam a fila num sink e o
+  registro no outro); o `invalidate` rejeita com `CANCELLED`
   (`"Module invalidated"`) toda Promise pendente, na ordem de registro; o `onLog` nunca entra na fila.
 - `startOfDayIso` é o `LocalDate.atStartOfDay(zone)` do `java.time`: num dia cuja meia-noite não existe, o fim do buraco
   (`2018-11-04T01:00:00-02:00` em `America/Sao_Paulo`); offset zero sai `Z`; os segundos de um offset antigo caem. Um

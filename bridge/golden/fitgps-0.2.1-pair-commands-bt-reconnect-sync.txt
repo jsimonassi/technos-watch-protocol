@@ -6,8 +6,8 @@ resolve initialize null
 call pairDevice("AA:BB:CC:DD:EE:FF", "fitGPS")
 host stopScan
 event onConnectStateChanged {"state":1,"sessionState":"CONNECTING","phase":null}
-host setRecordingDeviceName Mormaii_fitGPS
 event onConnectStateChanged {"state":1,"sessionState":"CONFIGURING","phase":null}
+host setRecordingDeviceName Mormaii_fitGPS
 event onConnectStateChanged {"state":1,"sessionState":"HANDSHAKING","phase":null}
 event onConnectStateChanged {"state":1,"sessionState":"HANDSHAKING","phase":"BIND"}
 event onConnectStateChanged {"state":1,"sessionState":"HANDSHAKING","phase":"LOGIN"}

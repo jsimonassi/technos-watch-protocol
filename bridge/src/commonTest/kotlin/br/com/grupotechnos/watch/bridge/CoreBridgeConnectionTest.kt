@@ -51,10 +51,10 @@ class CoreBridgeConnectionTest {
 	fun pairDeviceStopsTheScanSavesThePairingAtReadyAndResolvesAfterTheEvent() = runBridge { b ->
 		val completion = b.completion("pairDevice")
 		b.bridge.pairDevice(ADDRESS, "fitGPS", completion)
-		assertEquals(listOf("host stopScan"), b.journal.lines, "the recording is named only when the link opens")
+		assertEquals(listOf("host stopScan"), b.journal.lines, "the recording is named only when the handshake starts")
 		b.run()
 		assertEquals(
-			listOf("host stopScan", pairingTrail[0], "host setRecordingDeviceName Mormaii_fitGPS") + pairingTrail.drop(1) +
+			listOf("host stopScan") + pairingTrail.take(2) + "host setRecordingDeviceName Mormaii_fitGPS" + pairingTrail.drop(2) +
 				listOf(savedFitGps, ready, "resolve pairDevice null"),
 			b.journal.lines,
 		)
@@ -138,7 +138,7 @@ class CoreBridgeConnectionTest {
 		assertEquals(1, b.bridge.pendingRequests, "registered without a promise, for the error's method name")
 		b.run()
 		val named = b.journal.lines.indexOf("host setRecordingDeviceName Mormaii_fitGPS")
-		assertEquals(b.journal.lines.indexOf("""event onConnectStateChanged {"state":1,"sessionState":"CONFIGURING","phase":null}""") - 1, named)
+		assertEquals(b.journal.lines.indexOf("""event onConnectStateChanged {"state":1,"sessionState":"HANDSHAKING","phase":null}""") - 1, named)
 		assertEquals(listOf(ADDRESS to true), b.h.transport.connects)
 		assertEquals(ConnectionState.READY, b.h.session.state)
 		assertTrue(b.journal.lines.contains(savedFitGps))
@@ -381,7 +381,30 @@ class CoreBridgeConnectionTest {
 	}
 
 	@Test
-	fun recordingIsNamedOnlyWhenALinkOpensAndDropsThePreviousWatchFirmware() = runBridge { b ->
+	fun startPairingAttemptRefusedBecauseTheWatchRemovedThePairingIsOnlyAnErrorEventWithTheMethod() = runBridge { b ->
+		b.host.pairing = CorePairing(ADDRESS, "fitgps", "fitGPS")
+		b.h.transport.connectBehavior = { _, _ -> false }
+		b.bridge.startPairingAttempt(ADDRESS, "fitGPS", b.completion("startPairingAttempt"))
+		b.run()
+		assertEquals(listOf("resolve startPairingAttempt null"), b.journal.starting("resolve"))
+		b.journal.clear()
+		// A conexão pendente que o iOS encerra com o vínculo apagado (LinkLifecycle.linkDown no Repo 2).
+		b.h.transport.dropLink(GattStatus.PAIRING_REMOVED, "Connect failed (status=-4)")
+		b.run()
+		assertEquals(2, b.journal.lines.size, b.journal.lines.joinToString("\n"))
+		assertEquals("""event onConnectStateChanged {"state":0,"sessionState":"DISCONNECTED","phase":null}""", b.journal.lines[0])
+		val error = b.journal.lines[1]
+		assertTrue(error.startsWith("""event onError {"requestId":1,"code":"PAIRING_REMOVED","message":"the watch erased the Bluetooth pairing"""), error)
+		assertTrue(error.endsWith(""""method":"startPairingAttempt"}"""), error)
+		assertEquals(ConnectionState.DISCONNECTED, b.h.session.state)
+		assertEquals(0, b.bridge.pendingRequests)
+		assertEquals(CorePairing(ADDRESS, "fitgps", "fitGPS"), b.host.pairing)
+		b.advance(120_000)
+		assertEquals(listOf(ADDRESS to true), b.h.transport.connects, "the pending connect is not tried again")
+	}
+
+	@Test
+	fun recordingIsNamedOnlyWhenAHandshakeStartsAndDropsThePreviousWatchFirmware() = runBridge { b ->
 		b.pairReady()
 		b.bridge.getDeviceInfo(b.completion("getDeviceInfo"))
 		b.run()
@@ -397,24 +420,45 @@ class CoreBridgeConnectionTest {
 		b.run()
 		b.h.transport.dropLink(GattStatus.PAIRING_REMOVED, "Connect failed (status=-4)")
 		b.run()
-		assertTrue(b.journal.starting("host setRecording").isEmpty(), b.journal.lines.joinToString("\n"))
-		// Um link do Life Ultra GPS que abre (o transporte de teste só tem o serviço do fitGPS, e a configuração falha depois).
+		// Links do Life Ultra GPS que abrem e falham na configuração, antes de qualquer pacote: a descoberta com o vínculo
+		// apagado e o GATT_NOT_SUPPORTED (o transporte de teste só tem o serviço do fitGPS).
 		b.h.transport.connectBehavior = { _, _ -> true }
+		b.h.transport.discoveryStatus = GattStatus.PAIRING_REMOVED
 		b.bridge.pairDevice(ADDRESS, "Life Ultra GPS", b.completion("pairDevice"))
 		b.run()
-		val configuring = b.journal.lines.indexOf("""event onConnectStateChanged {"state":1,"sessionState":"CONFIGURING","phase":null}""")
+		b.h.transport.discoveryStatus = GattStatus.SUCCESS
+		b.bridge.pairDevice(ADDRESS, "Life Ultra GPS", b.completion("pairDevice"))
+		b.run()
+		assertEquals(2, b.journal.starting("""event onConnectStateChanged {"state":1,"sessionState":"CONFIGURING"""").size)
 		assertEquals(
-			listOf("host setRecordingFirmware null", "host setRecordingDeviceName Life Ultra GPS"),
-			b.journal.lines.subList(configuring - 2, configuring),
-			"effects before the event; the fitGPS firmware leaves the header",
+			listOf("PAIRING_REMOVED", "PAIRING_REMOVED", "GATT_NOT_SUPPORTED"),
+			b.journal.starting("reject pairDevice").map { it.split(" ")[2] },
+		)
+		assertTrue(b.journal.starting("host setRecording").isEmpty(), b.journal.lines.joinToString("\n"))
+		// Outro fitGPS chega ao handshake: o cabeçalho passa a ser dele, e o firmware do anterior sai.
+		b.bridge.pairDevice(OTHER_ADDRESS, "fitGPS", b.completion("pairDevice"))
+		b.run()
+		val handshaking = b.journal.lines.indexOf("""event onConnectStateChanged {"state":1,"sessionState":"HANDSHAKING","phase":null}""")
+		assertEquals(
+			listOf("host setRecordingFirmware null", "host setRecordingDeviceName Mormaii_fitGPS"),
+			b.journal.lines.subList(handshaking - 2, handshaking),
+			"effects before the event; the previous watch's firmware leaves the header",
 		)
 		assertEquals(2, b.journal.starting("host setRecording").size)
-		assertTrue(b.logger.withTag("CoreBridge/recordLinkedWatch").single().startsWith("Recording header now names Life Ultra GPS (lifeultragps)"))
-		// Outro link do mesmo relógio não mexe no cabeçalho.
+		assertTrue(b.logger.withTag("CoreBridge/recordLinkedWatch").single().startsWith("Recording header now names Mormaii_fitGPS (fitgps)"))
+		// Outro link do mesmo relógio (a reconexão da sessão depois de uma queda) não mexe no cabeçalho.
 		b.journal.clear()
-		b.bridge.pairDevice(ADDRESS, "Life Ultra GPS", b.completion("pairDevice"))
+		b.h.transport.dropLink()
 		b.run()
-		assertTrue(b.journal.lines.contains("""event onConnectStateChanged {"state":1,"sessionState":"CONFIGURING","phase":null}"""))
+		assertTrue(
+			b.journal.lines.contains("""event onConnectStateChanged {"state":1,"sessionState":"HANDSHAKING","phase":null}"""),
+			b.journal.lines.joinToString("\n"),
+		)
 		assertTrue(b.journal.starting("host setRecording").isEmpty(), b.journal.lines.joinToString("\n"))
+	}
+
+	private companion object {
+		/** Um segundo relógio do mesmo modelo, para trocar o relógio do cabeçalho. */
+		const val OTHER_ADDRESS = "11:22:33:44:55:66"
 	}
 }

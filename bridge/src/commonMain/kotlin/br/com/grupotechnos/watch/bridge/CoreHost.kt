@@ -72,8 +72,8 @@ public interface CoreHost {
 
 	/**
 	 * Nome do relógio no cabeçalho da gravação de frames (`FrameJsonl.header`, campo `device`). O [CoreBridge] chama
-	 * quando o link de um relógio diferente do anterior abre (sessão em `CONFIGURING`) e no `onDeviceInfo`, nunca no
-	 * pedido de conexão.
+	 * quando a tentativa de um relógio diferente do anterior chega ao handshake (sessão em `HANDSHAKING`, a primeira
+	 * etapa que grava pacote do relógio) e no `onDeviceInfo`, nunca no pedido de conexão.
 	 */
 	public fun setRecordingDeviceName(name: String)
 

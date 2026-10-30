@@ -54,11 +54,12 @@ class CoreBridgeLifecycleTest {
 		assertEquals(
 			listOf(
 				"""event onConnectStateChanged {"state":0,"sessionState":"RECONNECTING","phase":null}""",
-				"host setRecordingDeviceName Mormaii_fitGPS",
 				"""event onConnectStateChanged {"state":1,"sessionState":"CONFIGURING","phase":null}""",
+				"host setRecordingDeviceName Mormaii_fitGPS",
+				"""event onConnectStateChanged {"state":1,"sessionState":"HANDSHAKING","phase":null}""",
 			),
-			b.journal.lines.subList(2, 5),
-			"the recording is named when the link opens",
+			b.journal.lines.subList(2, 6),
+			"the recording is named when the handshake starts",
 		)
 	}
 

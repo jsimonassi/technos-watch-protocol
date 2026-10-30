@@ -42,11 +42,11 @@ A descoberta (ts 1793363706739 e 1793363706740) devolveu dois serviços, com as 
 | | `00000af7-…` | read, notify | notificação normal (perfil) |
 | | `00000af1-…` | read, write, writeWithoutResponse | escrita de saúde, não usada |
 | | `00000af2-…` | read, notify | notificação de saúde (`extraNotify`) |
-| `00000000-0000-0000-6473-5f696c666973` | `00000000-0000-0100-6473-5f696c666973` | read, write, writeWithoutResponse | não usada |
-| | `00000000-0000-0200-6473-5f696c666973` | read, write, writeWithoutResponse, notify | não usada |
+| `00000000-0000-0000-6473-5f696c666973` | `00000000-0000-0100-6473-5f696c666973` | read, write, writeWithoutResponse | DFU da SiFli (só definida na SDK); não usada |
+| | `00000000-0000-0200-6473-5f696c666973` | read, write, writeWithoutResponse, notify | canal serial do DFU da SiFli; não usada |
 
 - **`0af6` aceita escrita sem resposta**: era a pergunta aberta do host iOS (seção 8). As 12 escritas da gravação saíram sem resposta e todas foram respondidas. A `0af6` aceita também escrita com resposta, que a SDK não usa.
-- **O segundo serviço** não aparece na SDK Java nem no log de produção. Os 8 últimos bytes do UUID, `64 73 5f 69 6c 66 69 73`, são o ASCII `ds_ilfis`, que lido de trás para frente é `sifli_sd`; o relógio é da plataforma SiFli (98, seção 3.1). **Hipótese, não confirmada**: um serviço da SiFli (OTA/DFU ou serial do fabricante), com os bytes do UUID gravados em little-endian. A sessão o ignora; não se escreve nada nele.
+- **O segundo serviço é o do DFU da SiFli**, a plataforma do relógio (98, seção 3.1). A SDK Java decompilada define o serviço e as duas characteristics (`javelin/basilisk.java:5-7`), e só o DFU da SiFli usa uma delas: o `onServicesDiscovered` do `SifliDFUService` procura a `0200` e loga `find serial trans UUID` (`com/sifli/siflidfu_aidu/SifliDFUService.java:507-512`); a `0100` só aparece na definição. O log de produção não o cita, porque não houve DFU. Os 8 últimos bytes do UUID, `64 73 5f 69 6c 66 69 73`, são o ASCII `ds_ilfis`, `sifli_sd` lido de trás para frente (os bytes do UUID em little-endian). A sessão o ignora e não escreve nada nele (DFU/OTA está fora da PoC).
 - **MTU**: o `didConnect` deu 515, ou seja, `maximumWriteValueLength(.withoutResponse)` = 512 (ts 1793363706261): o iOS negociou sozinho um MTU grande, que o relógio aceitou (o fitGPS, no mesmo iPhone, ficou em 23). A sessão não pediu MTU (`MTU not requested (profile asks for 23); using 23`, ts 1793363706978) e manteve os frames de até 20 bytes; o relógio respondeu com os mesmos tamanhos do Android (12 a 20 bytes). O 515 ficou no cabeçalho da gravação, sem efeito no replay (`fixtures.md`, seção 5).
 - **CCCD**: `0af7` e depois `0af2`, os dois com status 0 (ts 1793363706858 e 1793363706977), 0,24 s depois da descoberta.
 - **Tempos**: do `connect` ao `didConnect`, 1,0 s; do `didConnect` ao primeiro `02/01`, 0,7 s, sem as esperas da SDK, e o relógio respondeu em 60 ms.
