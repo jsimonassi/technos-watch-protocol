@@ -31,6 +31,11 @@ import kotlin.test.assertTrue
  * duas no mesmo histórico, como no telefone de quem sincroniza de manhã e à noite: `DAY_CUMULATIVE` dá 56 e
  * `HOURLY_SUM`, a regra do Core de produção, dá 112.
  *
+ * A gravação do iPhone de 2026-10-30 ([IOS_FIT_GPS_RECORDING]) traz o que veio depois da meia-noite: o `05/42` devolveu
+ * `mode 16` com 56 passos às 23:59:00 de 29/10, o total da tela de ontem, `mode 16` com 0 às 00:00:00 e o registro ao
+ * vivo `mode 0` com 0 às 09:30:07 (o relógio ficou parado a noite toda). Só `mode 0` vira amostra (`docs/sma-dados.md`,
+ * seção 1), então o 56 não volta a contar e hoje tem 0.
+ *
  * Está no `commonTest`: roda nos quatro targets, e cada total conferido imprime uma linha `STEPS-DAY` no `system-out` do
  * relatório XML, ao lado das linhas `REPLAY` (`docs/fixtures.md`, seção 4.1).
  */
@@ -97,6 +102,20 @@ class RealFixturesStepsTest {
 		)
 		assertEquals(hourly, history.today(StepsAggregation.HOURLY_SUM))
 		println("STEPS-DAY $MORNING + $EVENING: $DAY DAY_CUMULATIVE ${cumulative.steps}, HOURLY_SUM ${hourly.steps}")
+	}
+
+	@Test
+	fun iosRecordingAfterMidnightIgnoresYesterdaysTotalOnTheSitRecord() = runTest {
+		val night = replay(IOS_FIT_GPS_RECORDING)
+		try {
+			// Os mode 16 (56 às 23:59:00 de 29/10, 0 às 00:00:00) ficam de fora; o ao vivo de 09:30:07 dá 0 às 09:00.
+			assertEquals(listOf(Instant.parse("2026-10-30T09:00:00-03:00").toEpochMilliseconds() to 0), samples(night))
+			val days = night.session.getStepsDays(3)
+			assertEquals(listOf(StepsDay("2026-10-30", "2026-10-30T00:00:00-03:00", 0, 0, 0.0)), days)
+			println("STEPS-DAY $IOS_FIT_GPS_RECORDING: ${days.single().dayKey} = ${days.single().steps} steps (fitGPS profile)")
+		} finally {
+			close(night)
+		}
 	}
 
 	/** Reproduz [relative] (ações deduzidas, TX estrito) e confere que ela rodou inteira. */

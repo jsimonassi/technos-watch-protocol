@@ -51,6 +51,17 @@ public object WatchErrorCodes {
 	/** O link caiu com o comando em andamento ou na fila. */
 	public const val DISCONNECTED: String = "DISCONNECTED"
 
+	/**
+	 * O telefone guarda um vínculo Bluetooth do sistema que o relógio já apagou (o host entregou
+	 * `GattStatus.PAIRING_REMOVED`; no iOS, `CBError.peerRemovedPairingInformation`). O sistema recusa a conexão até o
+	 * usuário esquecer o relógio nas configurações de Bluetooth do telefone; o app não consegue remover o vínculo. Vale
+	 * para `pair` e `reconnect` em qualquer etapa: a sessão vai para `DISCONNECTED` e não tenta de novo sozinha, nem ao
+	 * religar o Bluetooth. Sem `pair`/`reconnect` pendente (a reconexão que a própria sessão começou depois de uma
+	 * queda), o erro sai com `WatchSession.NO_REQUEST_ID`, para o host saber por que a reconexão parou
+	 * (`docs/decisoes.md`, ADR 23).
+	 */
+	public const val PAIRING_REMOVED: String = "PAIRING_REMOVED"
+
 	/** O pedido foi cancelado por `disconnect`, por `close` ou por um `pair`/`reconnect` posterior que o substituiu. */
 	public const val CANCELLED: String = "CANCELLED"
 

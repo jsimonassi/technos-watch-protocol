@@ -34,7 +34,7 @@ Número de registros = `len(value) / tamanho`, com divisão inteira (`SmaManager
 | Valor | Nome | Uso aqui |
 |---|---|---|
 | 0 | normal (amostra do pedômetro) | **único que vira `StepsSample`** |
-| 16 / 17 / 18 | SIT / WALK / RUN | ignorado |
+| 16 / 17 / 18 | SIT / WALK / RUN | ignorado; o fitGPS 0.2.1 grava `mode 16` às 23:59:00 com o acumulado do dia e às 00:00:00 com 0 (seção 6) |
 | 32 / 34 / 47 | START / GOING / END de exercício | ignorado (o Core usa para atividade por diferença de passos, `SMAService.java:422-436`) |
 | 48, 49, 63 | START_IMED_6, START_IMED_12, END_IMED | ignorado |
 | 64..226 | pares `*_START/_GOING/_END` (indoor, outdoor, ciclismo, natação, caminhada, alpinismo, ioga, esteira, bicicleta, basquete, futebol, badminton) | ignorado |
@@ -86,7 +86,7 @@ O relógio só informa passos. Calorias e distância vêm das fórmulas da SDK (
 
 ## 5. Sono: analisador (exploratório)
 
-**Status**: exploratório. O fitGPS nunca teve sono consumido em produção: os dois Cores deixam `getHistorySleep` vazio (`SMAService.java:1423`; `SMAService.m:167`). As regras abaixo reproduzem a SDK, não um comportamento já observado no relógio. A validação depende de uma noite real (hipótese H4).
+**Status**: exploratório. O fitGPS nunca teve sono consumido em produção: os dois Cores deixam `getHistorySleep` vazio (`SMAService.java:1423`; `SMAService.m:167`). As regras abaixo reproduzem a SDK, não um comportamento validado no relógio. A primeira página real recente (2026-10-30, relógio parado na mesa, seção 6) passou pelo analisador e deu exatamente o que a SDK dá; falta uma noite com o relógio no pulso (hipótese H4, T3).
 
 `SmaSleepAnalyzer.analyze(records, timeZoneId)`:
 
@@ -124,7 +124,7 @@ O relógio só informa passos. Calorias e distância vêm das fórmulas da SDK (
 
 ## 6. Observado no fitGPS 0.2.1
 
-Fonte: a gravação real `fixtures/real/fitgps/0.2.1/pair-commands-bt-reconnect-sync.jsonl` (Android, 2026-10-29, `recordedAt` 08:14:10 em São Paulo, truncado no segundo: o início real foi 933 ms depois). Os `atMs` são dos pacotes; os registros estão em hexadecimal como chegaram.
+Fontes: as gravações de 2026-10-29 no Android (abaixo) e a de 2026-10-30 no iPhone (no fim da seção). A da manhã é a gravação real `fixtures/real/fitgps/0.2.1/pair-commands-bt-reconnect-sync.jsonl` (Android, 2026-10-29, `recordedAt` 08:14:10 em São Paulo, truncado no segundo: o início real foi 933 ms depois). Os `atMs` são dos pacotes; os registros estão em hexadecimal como chegaram.
 
 **SPORT (`05/41` → `05/42`)**, seis leituras:
 
@@ -138,7 +138,7 @@ Fonte: a gravação real `fixtures/real/fitgps/0.2.1/pair-commands-bt-reconnect-
 | 1031806 | 1032178 | `3275C08800000038` 08:30:00, 0, 56 · `3275C0DA00000038` 08:31:22, 0, 56 |
 
 - **Cada resposta termina com um registro "ao vivo"**, carimbado no segundo do pedido (com até 1 s de diferença, a do acerto de hora): o pedido de `atMs` 1031806 saiu às 08:31:22,7 no telefone e o último registro é 08:31:22. Por isso toda leitura traz pelo menos um registro, mesmo sem passo novo.
-- **`mode 16` (SIT, `SmaSport.java:75-121`) com 0 passos aparece depois do salto do relógio.** O relógio estava com a data de 2024-11-14 (o último registro de sono é de 2024-11-14 06:01) até o `02/01` de `atMs` 5891 acertá-lo para 2026-10-29 08:14:16; a primeira leitura trouxe um `mode 16` na hora antiga (23:59:00) e outro logo depois da hora nova (08:14:17). Só `mode 0` vira amostra, então os dois são ignorados (seção 1).
+- **`mode 16` (SIT, `SmaSport.java:75-121`) com 0 passos aparece depois do salto do relógio.** O relógio estava com a data de 2024-11-14 (o último registro de sono é de 2024-11-14 06:01) até o `02/01` de `atMs` 5891 acertá-lo para 2026-10-29 08:14:16; a primeira leitura trouxe um `mode 16` na hora antiga (23:59:00, o fechamento do dia; ver a gravação do iPhone, abaixo) e outro logo depois da hora nova (08:14:17). Só `mode 0` vira amostra, então os dois são ignorados (seção 1).
 - **Os valores `mode 0` são totais, não incrementos**: 0, 14, 14, 14, 56, 56, 56. Eles se repetem em vez de somar e não zeram às 08:30 (o registro de 08:30:00 exato ainda tem 56). Com a regra "vale o último da hora" (seção 2, ADR 7), a hora 08 fica com 56.
 - **Todos são da hora 08**: esta gravação sozinha não mostra a virada da hora. Quem decidiu foi a gravação da noite (abaixo): o valor não zera na virada da hora, é o acumulado do dia (H3 refutada, ADR 1).
 - Nenhum registro lido reaparece numa leitura seguinte, nem depois de 230 s de Bluetooth desligado (H2 sugerida para SPORT; H1: avanço visto, gatilho aberto; `protocolo-sma.md`, seção 8).
@@ -151,13 +151,59 @@ Fonte: a gravação real `fixtures/real/fitgps/0.2.1/pair-commands-bt-reconnect-
 - O conteúdo não parece sono de verdade: 630 START, 629 END e 3 DEEP; o mesmo START de 2023-10-20 12:33:00 se repete 554 vezes, e as páginas alternam um START repetido com ENDs de 2 em 2 min. A hipótese é um relógio parado gravando artefatos, a confirmar com a noite T4 (`pendencias.md`).
 - O analisador produziu 4 sessões, todas podadas no fim do sync por terem mais de 30 dias. Nenhuma noite real passou por ele (H4: formato provado, conteúdo não validado).
 
+**Depois da meia-noite, no iPhone** (`fixtures/real/fitgps/0.2.1/ios-pair-info-time-steps-sleep-sync.jsonl`, 2026-10-30, `recordedAt` 09:29:21,323). Entre a gravação da noite de 29/10 e esta, o relógio ficou parado na mesa, sem ser usado (o usuário não dormiu com ele). O BIND desta sessão começou às 09:29:21 e o `03/02` saiu às 09:29:25.
+
+SPORT (`05/41` → `05/42`), duas leituras:
+
+| Pedido (`atMs`) | Resposta (`atMs`) | Registros (relógio de parede, mode, passos) |
+|---|---|---|
+| 46389 | 46437 | `32769A4410000038` 2026-10-29 23:59:00, 16, 56 · `32769A8010000000` 2026-10-30 00:00:00, 16, 0 · `3277201F00000000` 09:30:07, 0, 0 |
+| 50541 | 50606 | `3277202300000000` 09:30:11, 0, 0 |
+
+- **`mode 16` às 23:59:00 com o total do dia.** Os 56 são o acumulado de 29/10, o que a tela mostrou (gravação da noite, acima; ADR 1). Até aqui o `mode 16` só tinha aparecido com 0 passos; o fechamento às 23:59:00 já estava na manhã de 29/10, sem passos: `2EC94B4410000000`, 2024-11-14 23:59:00, `mode 16`, 0, no dia antigo do relógio. O registro de 00:00:00, também `mode 16`, tem 0, e o ao vivo de 09:30:07 também: **o acumulado zerou à meia-noite**, e nenhum registro do dia novo traz o total de ontem (o risco da T5 na ADR 1 não apareceu, ao menos com o relógio parado). Os dois `mode 16` são ignorados (seção 1), então ontem continua com 56 e hoje tem 0, o esperado de um relógio parado (`RealFixturesStepsTest.iosRecordingAfterMidnightIgnoresYesterdaysTotalOnTheSitRecord`).
+- **Nenhum `mode 0` entre a leitura das 21:37 de 29/10 e o ao vivo de 09:30:07.** Com o relógio parado, ele não gravou instantâneos em hh:00 nem em hh:30. Se ele também não os grava com passos, o fechamento de 23:59:00 (`mode 16`) é o único registro do total final de um dia em que houve passos depois do último sync, e a regra "só `mode 0`" o perde. Esta gravação não decide: ninguém andou depois das 21:37 (seção 7; `pendencias.md`, T5).
+
+SLEEP (`05/45` em `atMs` 50671 → `05/46` em 50729): uma página de 9 registros (63 bytes, sem sobra), menos de 20, então a leitura acabou nela. Na ordem da página:
+
+| # | Registro | Relógio de parede | mode | soft | strong |
+|---|---|---|---|---|---|
+| 1 | `32767DE8110000` | 2026-10-29 21:58:00 | 17 START | 0 | 0 |
+| 2 | `32769CC2030000` | 2026-10-30 00:09:38 | 3 AWAKE | 0 | 0 |
+| 3 | `32769DEE020000` | 00:14:38 | 2 LIGHT | 0 | 0 |
+| 4 | `3276A046010000` | 00:24:38 | 1 DEEP | 0 | 0 |
+| 5 | `32771C94010300` | 09:15:00 | 1 DEEP | 3 | 0 |
+| 6 | `32772002030000` | 09:29:38 | 3 AWAKE | 0 | 0 |
+| 7 | `32771FF9030000` | 09:29:29 | 3 AWAKE | 0 | 0 |
+| 8 | `32772018030400` | 09:30:00 | 3 AWAKE | 4 | 0 |
+| 9 | `3277201D030000` | 09:30:05 | 3 AWAKE | 0 | 0 |
+
+- **Formato confirmado no aparelho com dado novo**: 7 bytes por registro (seção 1), os modos da tabela da seção 1 e os contadores `soft`/`strong` em uso (registros 5 e 8). Nenhum dos 1262 registros antigos de 2023-2024 voltou; o Sync da noite anterior já tinha vindo vazio (`pendencias.md`, bloco 1).
+- **Registros fora de ordem**: o 7 (09:29:29) chega depois do 6 (09:29:38). A SDK ordena antes de analisar (`SmaSleep.java:19`, `compareTo` em `:117-123`), e o analisador também (seção 5, passos 1 e 2).
+- **Sem END (34)**: a noite não fecha; a SDK transforma o último ponto em END (`:53-55`).
+- **START longe do primeiro estágio**: 2 h 11 min entre o START (21:58:00) e o primeiro estágio (00:09:38). O START vira LIGHT em 21:58:00 e DEEP em 22:13:00 (`:25-37`), e tudo até 00:09:38 conta como profundo.
+- **Sono detectado sem o relógio no pulso.** Parado na mesa, o relógio gravou uma noite inteira, com horário de noite (21:58 a 09:30). Os registros 6 a 9 caem no pareamento e nos primeiros comandos (09:29:21 a 09:30:07), quando o relógio provavelmente foi pego; o 5 (09:15:00, `soft` 3) é anterior, sem explicação conhecida.
+
+**O que o analisador produz** (passos 2 a 4), e a comparação com a SDK. O `SmaSleep.java` da SDK SMA decompilada foi compilado e rodado à parte sobre os mesmos 9 registros, com `time = 946684800000 + segundos × 1000` como em `SmaManager.java:815-831`:
+
+| | SDK (`analyseSleeps` + `getSleepStatus`) | `SmaSleepAnalyzer` |
+|---|---|---|
+| Pontos | LIGHT 21:58:00, DEEP 22:13:00, AWAKE 00:09:38, LIGHT 00:14:38, DEEP 00:24:38, LIGHT 09:00:00, LIGHT 09:15:00, AWAKE 09:29:29, END 09:30:05 | os mesmos (`SmaSleepAnalyzerTest.firstRealPageFromTheFitGpsGivesWhatTheSdkGives`) |
+| `[duração, profundo, leve, acordado]` | `[692, 632, 54, 6]` | `[692, 632, 54, 6]` |
+| Sessão | — (a SDK não monta sessão) | 29/10 21:58:00 → 30/10 09:30:05, `dayKey` 2026-10-30, 692 min: profundo 632, leve 54, acordado 6, REM 0 |
+| Estágios | — | LIGHT 21:58:00–22:13:00, DEEP 22:13:00–00:09:38, AWAKE 00:09:38–00:14:38, LIGHT 00:14:38–00:24:38, DEEP 00:24:38–09:00:00, LIGHT 09:00:00–09:29:29, AWAKE 09:29:29–09:30:05 |
+
+- Os pontos e os totais são idênticos. A única diferença é de forma: a SDK deixa dois LIGHT seguidos (09:00:00, que veio do registro 5 deslocado 15 min para trás por `soft > 2`, e 09:15:00, que veio do registro 8), porque tira os repetidos antes da última ordenação (`:48-50`, `:65`); o analisador junta os dois num estágio só (passo 4). Os 54 min de leve são 15 + 10 + 15 + 14 min 29 s, truncados no fim, como na SDK.
+- Uma noite só: nenhum END no meio e nenhuma lacuna acima de 12 h (a maior é 00:24:38 → 09:15:00, 8 h 50 min), então o agrupamento do passo 1, que é decisão desta biblioteca, não interfere.
+- **Estranho, mas igual à SDK; o comportamento não mudou.** (1) Nem o relógio nem a SDK separam relógio parado de pessoa dormindo: o relógio gravou a noite, e a SDK a analisa como qualquer outra. (2) A sessão termina no último registro (09:30:05), no meio dos comandos, e não num despertar. (3) 632 dos 692 min são profundo (91 %): 1 h 56 min entre o DEEP sintético de 22:13:00 e o primeiro registro, e 8 h 35 min entre 00:24:38 e 09:00:00, sem registro no meio. Um relógio parado gera uma noite com horário de noite; um filtro de plausibilidade por horário de início não a pegaria, e a fração de profundo talvez pegue (`pendencias.md`, item técnico 4).
+- Na sessão, a noite chega pelo `syncHistory([STEPS, SLEEP])` e sai em `getSleepSessions` com os valores acima (`RealFixturesSleepTest`, nos quatro targets; linha `SLEEP` no `system-out`).
+
 ## 7. O que falta confirmar com o relógio
 
 O roteiro de cada item, com o critério e onde registrar o resultado, está em [`pendencias.md`](pendencias.md).
 
-- A virada da meia-noite (T5): quando e como o acumulado do dia zera, e se o registro de 00:00:00 ou o registro ao vivo de logo depois da meia-noite ainda traz o total de ontem. Se trouxer, com `DAY_CUMULATIVE` hoje mostra o total de ontem até a contagem de hoje passá-lo, e só outro registro da hora 00 o corrige (ADR 1, "O que continua aberto"). O H3 em si está fechado para o firmware 0.2.1 (acumulado do dia, seção 6 e ADR 1); falta também ver como a hora fecha (registro em hh:00:00 ou em hh:59:xx) e se os registros de hh:00 e hh:30 são instantâneos que o relógio grava sozinho.
+- A virada da meia-noite (T5) com passos. Com o relógio parado (seção 6, iPhone), o dia fecha com `mode 16` às 23:59:00 trazendo o acumulado e o de 00:00:00 tem 0: o total de ontem não reaparece no dia novo. Falta ver, com passos depois do último sync do dia, se o relógio grava algum `mode 0` com o total final ou se ele só existe no `mode 16` de 23:59:00, que a regra "só `mode 0`" ignora; nesse caso, os passos depois do último sync se perdem para o dia. O H3 em si está fechado para o firmware 0.2.1 (acumulado do dia, seção 6 e ADR 1); falta também ver como a hora fecha (registro em hh:00:00 ou em hh:59:xx) e se o relógio grava registros em hh:00 e hh:30 sozinho quando há passos (parado, não gravou nenhum).
 - Se o contador zera no meio do dia sem Forget (relógio reiniciado ou com a bateria esgotada). Se zerar, com `DAY_CUMULATIVE` o dia vira o maior entre o pico de antes do zero e a contagem nova (ADR 1, "O que continua aberto"). O BIND não zera (seção 6).
 - H2 para o sono: os registros são apagados depois de lidos. No SPORT ela está sugerida; o sono foi lido uma vez só.
 - O gatilho do H1: o cursor avança com o nosso ACK ou com o pedido seguinte. O avanço foi visto nos dois (os registros de passos não voltam, as páginas de sono se encadeiam), o gatilho não (`pendencias.md`, item técnico 5).
-- H4: o conteúdo do `05/46` numa noite real. Se o fitGPS responder vazio sempre, investigar a variante legada `05/03` do iOS (`SmaBLE.m:2837-2862`).
+- H4: o conteúdo do `05/46` numa noite real, com o relógio no pulso, contra os horários anotados de deitar e levantar. A primeira página recente veio de um relógio parado (seção 6): o formato e as regras da SDK estão conferidos, o conteúdo não. Se o fitGPS responder vazio sempre, investigar a variante legada `05/03` do iOS (`SmaBLE.m:2837-2862`).
 - Como o relógio grava horários na mudança de horário de verão (os timestamps são de parede; a hora que se repete cai no mesmo balde).

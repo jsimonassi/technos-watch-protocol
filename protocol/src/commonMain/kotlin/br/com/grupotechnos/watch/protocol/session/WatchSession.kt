@@ -80,10 +80,10 @@ public class WatchSession internal constructor(
 	 *
 	 * Termina com `onCompleted(requestId)` quando chega em [ConnectionState.READY], ou com `onError`
 	 * (`UNSUPPORTED_DEVICE`, `CONNECT_TIMEOUT`, `GATT_NOT_SUPPORTED`, `HANDSHAKE_FAILED`, `DISCONNECTED`, `TRANSPORT`
-	 * quando o Bluetooth está desligado ou uma operação GATT da configuração falha, `CANCELLED` quando um `pair`,
-	 * `reconnect`, `disconnect` ou `close` posterior o substitui). Uma conexão ou um pareamento em andamento é
-	 * derrubado antes (não há `BUSY`). O BIND pode esperar confirmação na tela do relógio até `Quirks.bindTimeoutMs`;
-	 * durante o handshake a sessão não reconecta.
+	 * quando o Bluetooth está desligado ou uma operação GATT da configuração falha, `PAIRING_REMOVED` quando o relógio
+	 * apagou o vínculo do sistema que o telefone guarda, `CANCELLED` quando um `pair`, `reconnect`, `disconnect` ou
+	 * `close` posterior o substitui). Uma conexão ou um pareamento em andamento é derrubado antes (não há `BUSY`). O BIND
+	 * pode esperar confirmação na tela do relógio até `Quirks.bindTimeoutMs`; durante o handshake a sessão não reconecta.
 	 */
 	public fun pair(requestId: Int, address: String, profileId: String) {
 		engine.pair(requestId, address, profileId)
@@ -103,6 +103,12 @@ public class WatchSession internal constructor(
 	 * [ConnectionState.DISCONNECTED], termina com `onError(HANDSHAKE_FAILED)` e não refaz o BIND sozinha, porque um
 	 * BIND em segundo plano pode pedir confirmação na tela do relógio. Só um `pair` refaz o vínculo
 	 * (`docs/decisoes.md`, ADR 11). Falta de resposta e queda continuam tentando, com espera crescente.
+	 *
+	 * Se o host entregar `GattStatus.PAIRING_REMOVED` (o relógio apagou o vínculo do sistema que o telefone guarda; no
+	 * iOS, `CBError.peerRemovedPairingInformation`), a sessão também desiste, em qualquer etapa: vai para
+	 * [ConnectionState.DISCONNECTED] e termina com `onError(PAIRING_REMOVED)`, porque nenhuma tentativa passa antes de o
+	 * usuário esquecer o relógio nas configurações de Bluetooth do telefone. Na reconexão que a sessão começou sozinha
+	 * (sem pedido pendente), o erro sai com [NO_REQUEST_ID] (`docs/decisoes.md`, ADR 23).
 	 */
 	public fun reconnect(requestId: Int, address: String, profileId: String) {
 		engine.reconnect(requestId, address, profileId)

@@ -24,11 +24,33 @@ Este documento descreve o pedaço do protocolo BLE dos relógios iDO (VeryFit) q
 | Notificação de saúde | `00000af2-…` | CCCD ligado logo depois (linhas 67-70) |
 
 - **Perfil**: `Profiles.IDO_MAIN` (`service`, `write`, `notify` e `extraNotify = [0af2]`). A sessão liga os CCCD de `notify` e de cada `extraNotify`, um de cada vez e na ordem, antes do handshake (`SessionEngine.configure`). As notificações das duas characteristics chegam ao driver: a SDK entrega as duas ao mesmo decodificador nativo e não passa adiante de qual veio (`ido/ble/drizzle.java:36-53`). A escrita de saúde (`0af1`) não é usada.
-- **Tipo de escrita**: ATT Write Command (`WRITE_TYPE_NO_RESPONSE`), sempre: é o que a SDK faz em produção, porque o Core nunca chama `setIsNeedResponse` (`connect/drizzle.java:195-205`). O driver escreve com `WriteType.WITHOUT_RESPONSE`.
+- **Tipo de escrita**: ATT Write Command (`WRITE_TYPE_NO_RESPONSE`), sempre: é o que a SDK faz em produção, porque o Core nunca chama `setIsNeedResponse` (`connect/drizzle.java:195-205`). O driver escreve com `WriteType.WITHOUT_RESPONSE`. A `0af6` declara a propriedade (`writeWithoutResponse`, seção 1.1), o que o iOS exige: o `CoreBluetooth` descarta uma escrita `.withoutResponse` numa characteristic que não a declara.
 - **Um pacote em voo**: a SDK manda o próximo só depois do `onCharacteristicWrite` (ou de 3 s), inclusive para Write Command (`connect/drizzle.java:51-81`). No Android esse callback também vem para escrita sem resposta, então a fila GATT do host (`GattQueue`) e a espera do link da sessão fazem o mesmo ritmo.
-- **MTU**: a SDK nunca pede (`requestMtu` só aparece no DFU da SiFli). O perfil usa `requestMtu = 23`, e a sessão não pede MTU quando o perfil pede até 23. O Android 14 ou mais novo negocia um MTU maior sozinho; não muda nada aqui, porque todo frame legado tem no máximo 20 bytes.
-- **Advertising**: o scan de produção viu o nome `Life Ultra GPS` (linha 74). O catálogo do Core atual lista `Smart Watch 6010` como nome BLE e `Life Ultra GPS` como `appName` (`AvailableDevices.java:39`); o perfil aceita os dois nomes (`DeviceRegistry.identify`, comparação exata). Os serviços anunciados não foram registrados; o host filtra o scan pelos nomes e pelo serviço `0af0` dos perfis.
+- **MTU**: a SDK nunca pede (`requestMtu` só aparece no DFU da SiFli). O perfil usa `requestMtu = 23`, e a sessão não pede MTU quando o perfil pede até 23. O Android 14 ou mais novo negocia um MTU maior sozinho, e o iOS também (515 no iPhone, seção 1.1); não muda nada aqui, porque todo frame legado tem no máximo 20 bytes.
+- **Advertising**: o scan de produção viu o nome `Life Ultra GPS` (linha 74). O catálogo do Core atual lista `Smart Watch 6010` como nome BLE e `Life Ultra GPS` como `appName` (`AvailableDevices.java:39`); o perfil aceita os dois nomes (`DeviceRegistry.identify`, comparação exata). No iPhone, o anúncio não trouxe nenhum UUID de serviço (log de texto do app de exemplo, ts 1793363703643): um filtro de scan pelo serviço `0af0` não acha o relógio; o nome acha, como no fitGPS.
 - **Antes do primeiro comando** a SDK faz `refresh` do cache GATT, espera 1 s, descobre os serviços, espera 100 ms e liga os dois CCCD (linhas 57-70). A sessão não faz `refresh` nem as esperas (`docs/decisoes.md`, ADR 22).
+
+### 1.1 O que o iPhone mostrou (2026-10-30)
+
+Fonte: o log de texto do app de exemplo em Release no iPhone, depois de o usuário esquecer o vínculo antigo nos Ajustes (`docs/decisoes.md`, ADR 23), e a gravação `fixtures/real/lifeultragps/1.1.1/ios-pair-info-time-steps-sync.jsonl`. O log fica fora do git (traz o nome do iPhone e aparelhos vizinhos) e é citado pelo `ts`.
+
+A descoberta (ts 1793363706739 e 1793363706740) devolveu dois serviços, com as propriedades que o `CoreBluetooth` informa:
+
+| Serviço | Characteristic | Propriedades | Uso |
+|---|---|---|---|
+| `00000af0-…` | `00000af6-…` | read, write, writeWithoutResponse | escrita dos comandos (perfil) |
+| | `00000af7-…` | read, notify | notificação normal (perfil) |
+| | `00000af1-…` | read, write, writeWithoutResponse | escrita de saúde, não usada |
+| | `00000af2-…` | read, notify | notificação de saúde (`extraNotify`) |
+| `00000000-0000-0000-6473-5f696c666973` | `00000000-0000-0100-6473-5f696c666973` | read, write, writeWithoutResponse | não usada |
+| | `00000000-0000-0200-6473-5f696c666973` | read, write, writeWithoutResponse, notify | não usada |
+
+- **`0af6` aceita escrita sem resposta**: era a pergunta aberta do host iOS (seção 8). As 12 escritas da gravação saíram sem resposta e todas foram respondidas. A `0af6` aceita também escrita com resposta, que a SDK não usa.
+- **O segundo serviço** não aparece na SDK Java nem no log de produção. Os 8 últimos bytes do UUID, `64 73 5f 69 6c 66 69 73`, são o ASCII `ds_ilfis`, que lido de trás para frente é `sifli_sd`; o relógio é da plataforma SiFli (98, seção 3.1). **Hipótese, não confirmada**: um serviço da SiFli (OTA/DFU ou serial do fabricante), com os bytes do UUID gravados em little-endian. A sessão o ignora; não se escreve nada nele.
+- **MTU**: o `didConnect` deu 515, ou seja, `maximumWriteValueLength(.withoutResponse)` = 512 (ts 1793363706261): o iOS negociou sozinho um MTU grande, que o relógio aceitou (o fitGPS, no mesmo iPhone, ficou em 23). A sessão não pediu MTU (`MTU not requested (profile asks for 23); using 23`, ts 1793363706978) e manteve os frames de até 20 bytes; o relógio respondeu com os mesmos tamanhos do Android (12 a 20 bytes). O 515 ficou no cabeçalho da gravação, sem efeito no replay (`fixtures.md`, seção 5).
+- **CCCD**: `0af7` e depois `0af2`, os dois com status 0 (ts 1793363706858 e 1793363706977), 0,24 s depois da descoberta.
+- **Tempos**: do `connect` ao `didConnect`, 1,0 s; do `didConnect` ao primeiro `02/01`, 0,7 s, sem as esperas da SDK, e o relógio respondeu em 60 ms.
+- **Vínculo do sistema**: o iPhone guardava um vínculo do sistema (bond com LTK) de um pareamento antigo pelo app de produção, e o relógio, pareado depois com um Android, tinha apagado as chaves do iPhone (`CBError.peerRemovedPairingInformation`, ADR 23). Ou seja, o par iPhone + app de produção criou um bond com este relógio. Não se sabe se o iOS mostrou o diálogo de pareamento do sistema no pareamento novo, que deu certo na primeira tentativa (seção 8 e `pendencias.md`).
 
 ## 2. Frame legado
 
@@ -143,7 +165,7 @@ Com o desafio do log, `E = 31 bc c3 54 3f 1c | e0 3e 1c 85 03 7c`:
 | `e0 3e 1c 85 03 7c` | `E[6..11]` |
 | `d1 82 df d1 3c 60` | `31^e0`, `bc^3e`, `c3^1c`, `54^85`, `3f^03`, `1c^7c` |
 
-O que dá `04 05 0c 00 e0 3e 1c 85 03 7c d1 82 df d1 3c 60`, igual ao envio da linha 154 (`IdoAuth.reply`). O relógio mostra a tela de confirmação e só responde depois do toque: `04 05 00 …` (`auth_code` 0, sucesso) chegou 1,9 s depois (linha 158; o JSON da SDK, linhas 159-163; `bind ok!`, linha 165). O relógio espera até 240 s (`bind_confirm_timeout`, linha 101); o perfil espera 90 s (`bindTimeoutMs`), pelo `04/01` e pelo `04/05`.
+O que dá `04 05 0c 00 e0 3e 1c 85 03 7c d1 82 df d1 3c 60`, igual ao envio da linha 154 (`IdoAuth.reply`). O relógio mostra a tela de confirmação e só responde depois do toque: `04 05 00 …` (`auth_code` 0, sucesso) chegou 1,9 s depois (linha 158; o JSON da SDK, linhas 159-163; `bind ok!`, linha 165). Com o driver próprio, o toque levou 1,5 s no Android e 1,4 s no iPhone (`atMs` 181 → 1672 de `pair-info-time-steps-sync.jsonl` e 119 → 1528 de `ios-pair-info-time-steps-sync.jsonl`), cada um com um desafio diferente. O relógio espera até 240 s (`bind_confirm_timeout`, linha 101); o perfil espera 90 s (`bindTimeoutMs`), pelo `04/01` e pelo `04/05`.
 
 ### 4.3 Primeiro pareamento (`HandshakeMode.FIRST_PAIR`, fase `BIND`)
 
@@ -200,13 +222,13 @@ O total de passos do dia vem do `02/A0` ao vivo. O `refreshSteps` e o `syncHisto
 | RX dados ao vivo 26 passos, 13 kcal totais, 25 m | 5835 |
 | V3 do mesmo dia: 0 kcal de atividade, 13 de repouso | 3891, 3893 |
 
-A gravação `fixtures/real/lifeultragps/1.1.1/pair-commands.jsonl` junta essas trocas na ordem em que a sessão as faz e roda num replay estrito pela `WatchSession` (`IdoRealFixturesReplayTest`); ela foi reconstruída do log de bytes da SDK, não do rádio (`fixtures.md`, seção 5). O XOR, a fórmula do fuso e a convenção da semana passaram por teste de mutação: trocar cada um derruba cinco ou seis testes.
+A gravação `fixtures/real/lifeultragps/1.1.1/pair-commands.jsonl` junta essas trocas na ordem em que a sessão as faz e roda num replay estrito pela `WatchSession` (`IdoRealFixturesReplayTest`); ela foi reconstruída do log de bytes da SDK, não do rádio (`fixtures.md`, seção 5). As gravações do rádio pelo driver próprio, uma no Android e uma no iPhone (`pair-info-time-steps-sync.jsonl` e `ios-pair-info-time-steps-sync.jsonl`), rodam no mesmo teste. O XOR, a fórmula do fuso e a convenção da semana passaram por teste de mutação: trocar cada um derruba cinco ou seis testes.
 
 ## 8. O que não se sabe e o que ficou fora
 
 - **Bytes do desvínculo.** A SDK monta o unbind na biblioteca nativa (evento 201) e o log não o capturou. O driver não inventa bytes: `unbind` falha sem escrever, o `forget` apaga o estado local e desconecta, e o relógio continua se dizendo vinculado até um bind novo (que pede a confirmação de novo). Captura pendente (`pendencias.md`).
 - **Histórico V3** (passos por hora, sono, frequência cardíaca): fluxo de várias etapas em JSON com CRC-16/CCITT-FALSE, fora da PoC.
-- **Vínculo BLE da SiFli** (bonding/criptografia do link): o log não mostra `createBond`, e o relógio respondeu sem pareamento do sistema. Se um firmware exigir, o host Android vai ver falha de escrita ou queda.
+- **Vínculo BLE da SiFli** (bonding/criptografia do link): o log não mostra `createBond`, e o relógio respondeu sem pareamento do sistema. Se um firmware exigir, o host Android vai ver falha de escrita ou queda. No iPhone, porém, havia um bond do sistema com este relógio, criado no pareamento antigo pelo app de produção (seção 1.1; ADR 23): alguém pediu criptografia do link, o relógio ou a SDK iOS. Falta saber se o relógio pede criptografia por conta própria, o que se vê pelo diálogo de pareamento do sistema no iPhone ou por um `createBond`/`ACTION_BOND_STATE_CHANGED` no Android (`pendencias.md`).
 - **`pairFlag` antes do bind** (seção 4.3), bytes 10-11 da informação básica, ordem dos campos BT3 do `02/EB` e o byte 18 do `02/A0`: não lidos.
 - **Canal de saúde** (`0af1`/`0af2`, comandos `0x08`/`0x09`): só a notificação é ligada.
-- **iOS**: o tipo de escrita sem resposta e o ritmo pelo callback (`peripheralIsReady(toSendWriteWithoutResponse:)`) ainda não existem num host iOS.
+- **iOS**: respondido no iPhone em 2026-10-30. A `0af6` declara escrita sem resposta, e o host iOS do Repo 2 escreve assim, no ritmo do `canSendWriteWithoutResponse`; as 12 escritas da gravação foram respondidas (seção 1.1).

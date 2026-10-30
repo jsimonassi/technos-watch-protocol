@@ -70,11 +70,18 @@ public interface CoreHost {
 	/** Apaga o relógio salvo. */
 	public fun clearPairing()
 
-	/** Nome do relógio no cabeçalho da gravação de frames (`FrameJsonl.header`, campo `device`). */
+	/**
+	 * Nome do relógio no cabeçalho da gravação de frames (`FrameJsonl.header`, campo `device`). O [CoreBridge] chama
+	 * quando o link de um relógio diferente do anterior abre (sessão em `CONFIGURING`) e no `onDeviceInfo`, nunca no
+	 * pedido de conexão.
+	 */
 	public fun setRecordingDeviceName(name: String)
 
-	/** Firmware do relógio no cabeçalho da gravação de frames (`FrameJsonl.header`, campo `firmware`). */
-	public fun setRecordingFirmware(firmware: String)
+	/**
+	 * Firmware do relógio no cabeçalho da gravação de frames (`FrameJsonl.header`, campo `firmware`). `null` quando o
+	 * relógio do cabeçalho mudou e o firmware do novo ainda não foi lido: o do anterior não pode ficar no cabeçalho.
+	 */
+	public fun setRecordingFirmware(firmware: String?)
 
 	/**
 	 * As últimas [limit] entradas do log em memória, **da mais nova para a mais antiga**; [limit] fora de

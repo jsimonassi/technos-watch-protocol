@@ -6,6 +6,7 @@ import br.com.grupotechnos.watch.protocol.log.FrameDirection
 import br.com.grupotechnos.watch.protocol.log.LogLevel
 import br.com.grupotechnos.watch.protocol.profile.Profiles
 import br.com.grupotechnos.watch.protocol.testing.WatchReply
+import br.com.grupotechnos.watch.protocol.transport.GattStatus
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -42,7 +43,6 @@ class CoreBridgeLifecycleTest {
 		assertEquals(
 			listOf(
 				"""event onConnectStateChanged {"state":0,"sessionState":"DISCONNECTED","phase":null}""",
-				"host setRecordingDeviceName Mormaii_fitGPS",
 				"resolve initialize null",
 			),
 			b.journal.lines,
@@ -51,6 +51,15 @@ class CoreBridgeLifecycleTest {
 		b.run()
 		assertEquals(listOf(ADDRESS to true), b.h.transport.connects, "reconnect is a pending connect")
 		assertEquals(ConnectionState.READY, b.h.session.state)
+		assertEquals(
+			listOf(
+				"""event onConnectStateChanged {"state":0,"sessionState":"RECONNECTING","phase":null}""",
+				"host setRecordingDeviceName Mormaii_fitGPS",
+				"""event onConnectStateChanged {"state":1,"sessionState":"CONFIGURING","phase":null}""",
+			),
+			b.journal.lines.subList(2, 5),
+			"the recording is named when the link opens",
+		)
 	}
 
 	@Test
@@ -183,14 +192,44 @@ class CoreBridgeLifecycleTest {
 		b.bridge.onScanFailed(1, "Scan failed (errorCode=1)")
 		b.sink.ready = true
 		b.bridge.onHostResume()
+		assertEquals(listOf("Reconnecting to $ADDRESS (host resume)"), b.logger.withTag("CoreBridge/reconnectIfPaired"))
+		b.run()
 		assertEquals(
 			listOf(
 				"""event onError {"requestId":-1,"code":"TRANSPORT","message":"Scan failed (errorCode=1) (errorCode=1)","method":"scan"}""",
-				"host setRecordingDeviceName Mormaii_fitGPS",
+				"""event onConnectStateChanged {"state":0,"sessionState":"RECONNECTING","phase":null}""",
 			),
-			b.journal.lines,
+			b.journal.lines.take(2),
 		)
-		assertEquals(listOf("Reconnecting to $ADDRESS (host resume)"), b.logger.withTag("CoreBridge/reconnectIfPaired"))
+	}
+
+	@Test
+	fun automaticReconnectTriesOncePerTriggerWhenTheWatchRemovedThePairing() = runBridge { b ->
+		b.host.pairing = saved
+		b.h.transport.connectBehavior = { _, auto -> !auto }
+		b.bridge.initialize(b.completion("initialize"))
+		b.run()
+		b.h.transport.dropLink(GattStatus.PAIRING_REMOVED, "Connect failed (status=-4)")
+		b.run()
+		val error = b.journal.starting("event onError").single()
+		assertTrue(error.startsWith("""event onError {"requestId":1,"code":"PAIRING_REMOVED""""), error)
+		assertTrue(error.endsWith(""""method":null}"""), error)
+		assertEquals(ConnectionState.DISCONNECTED, b.h.session.state)
+		b.advance(120_000)
+		assertEquals(1, b.h.transport.connects.size, "nothing reacts to DISCONNECTED: no loop")
+		// Outro gatilho com o vínculo ainda apagado: uma tentativa, um erro.
+		b.bridge.onBluetoothTurnedOn()
+		b.run()
+		b.h.transport.dropLink(GattStatus.PAIRING_REMOVED, "Connect failed (status=-4)")
+		b.run()
+		assertEquals(2, b.h.transport.connects.size)
+		assertEquals(2, b.journal.starting("event onError").size)
+		// O usuário esqueceu o relógio nos Ajustes e voltou ao app: a volta ao primeiro plano reconecta.
+		b.h.transport.connectBehavior = { _, _ -> true }
+		b.bridge.onHostResume()
+		b.run()
+		assertEquals(3, b.h.transport.connects.size)
+		assertEquals(ConnectionState.READY, b.h.session.state)
 	}
 
 	@Test

@@ -224,9 +224,11 @@ public class CoreBridge internal constructor(
 
 	/**
 	 * `pairDevice(deviceId, name)`: primeiro pareamento. Confere permissão, Bluetooth, endereço e nome (rejeição
-	 * antecipada, com `onError` antes); para o scan, zera o "usuário desconectou", põe o nome no cabeçalho da gravação e
-	 * pede `WatchSession.pair`. Resolve com `null` quando a sessão chega em `READY`; uma falha sai como `onError`
-	 * (`method` `"pairDevice"`) e rejeita com o código da sessão.
+	 * antecipada, com `onError` antes); para o scan, zera o "usuário desconectou" e pede `WatchSession.pair`. Resolve
+	 * com `null` quando a sessão chega em `READY`; uma falha sai como `onError` (`method` `"pairDevice"`) e rejeita com o
+	 * código da sessão (inclusive `PAIRING_REMOVED`, que o JS mostra como "esqueça o relógio nos ajustes de Bluetooth").
+	 * O nome do relógio só vai para o cabeçalho da gravação quando o link abre (o listener, em `CONFIGURING`), e não
+	 * aqui: uma tentativa que nunca conecta não pode renomear a gravação de outro relógio.
 	 *
 	 * @param name `appName` (`"fitGPS"`, `"Life Ultra GPS"`: o que o app Mormaii manda), nome BLE (`"Mormaii_fitGPS"`,
 	 * `"Smart Watch 6010"`) ou `id` do perfil.
@@ -235,7 +237,6 @@ public class CoreBridge internal constructor(
 		val profile = checkConnectTarget(METHOD_PAIR, deviceId, name, completion) ?: return
 		host.stopScan()
 		userDisconnected = false
-		host.setRecordingDeviceName(recordingName(profile))
 		val requestId = requests.register(METHOD_PAIR, completion)
 		session.pair(requestId, deviceId, profile.id)
 	}
@@ -244,12 +245,11 @@ public class CoreBridge internal constructor(
 	 * `startPairingAttempt(deviceId, name)`: reconexão a um relógio já pareado. Mesmas checagens de [pairDevice], sem
 	 * parar o scan; pede `WatchSession.reconnect` e **resolve na hora** com `null` (a reconexão pode levar horas, e o JS
 	 * acompanha pelo `onConnectStateChanged`). Uma falha posterior sai só como `onError` (`method`
-	 * `"startPairingAttempt"`).
+	 * `"startPairingAttempt"`). Como no [pairDevice], o cabeçalho da gravação só muda quando o link abre.
 	 */
 	public fun startPairingAttempt(deviceId: String, name: String, completion: CoreCompletion) {
 		val profile = checkConnectTarget(METHOD_START_PAIRING_ATTEMPT, deviceId, name, completion) ?: return
 		userDisconnected = false
-		host.setRecordingDeviceName(recordingName(profile))
 		// Sem completion no registro: o terminal só emite o onError, com o nome do método.
 		val requestId = requests.register(METHOD_START_PAIRING_ATTEMPT, null)
 		session.reconnect(requestId, deviceId, profile.id)
@@ -496,6 +496,12 @@ public class CoreBridge internal constructor(
 	 * nativo do `useSdkInit` do app Mormaii, que chama `pairDevice(lastDevice)` a cada volta ao primeiro plano
 	 * (`useSdkInit.ts:15-32`). O `requestId` é interno, sem completion: uma falha sai como `onError` com `method` `null`.
 	 *
+	 * Uma tentativa por gatilho (`initialize`, volta ao primeiro plano, Bluetooth religado): quando a sessão desiste
+	 * (`HANDSHAKE_FAILED` de um LOGIN recusado, `PAIRING_REMOVED` de um vínculo apagado no relógio) ela fica em
+	 * `DISCONNECTED`, e só o próximo gatilho tenta de novo; nada aqui reage ao `DISCONNECTED`, então não há laço. Com
+	 * `PAIRING_REMOVED`, a volta ao primeiro plano depois de o usuário esquecer o relógio nos Ajustes é justamente o
+	 * gatilho que reconecta.
+	 *
 	 * @return `true` se pediu a reconexão.
 	 */
 	internal fun reconnectIfPaired(reason: String): Boolean {
@@ -505,7 +511,6 @@ public class CoreBridge internal constructor(
 		if (state != ConnectionState.DISCONNECTED && state != ConnectionState.BLUETOOTH_OFF) return false
 		if (!host.isBluetoothEnabled() || host.missingConnectPermission() != null) return false
 		log(LogLevel.INFO, "reconnectIfPaired", "Reconnecting to ${pairing.address} ($reason)")
-		DeviceRegistry.byId(pairing.profileId)?.bleNames?.firstOrNull()?.let { host.setRecordingDeviceName(it) }
 		session.reconnect(requests.nextId(), pairing.address, pairing.profileId)
 		return true
 	}
@@ -577,7 +582,7 @@ public class CoreBridge internal constructor(
 		return itemCategory to registeredAt
 	}
 
-	/** Nome do relógio no cabeçalho da gravação antes de a sessão ler a identificação. */
+	/** Nome do relógio no cabeçalho da gravação quando o link abre, antes de a sessão ler a identificação. */
 	private fun recordingName(profile: DeviceProfile): String = profile.bleNames.firstOrNull() ?: profile.appName
 
 	/** O [CoreEventSink] do módulo como destino da [PendingEvents]. */
@@ -598,12 +603,16 @@ public class CoreBridge internal constructor(
 	 * encontrar o dado emitido. Toda falha de comando também sai como `onError`, com o nome do método JS que a originou.
 	 */
 	private inner class SessionListener : WatchSessionListener {
+		/** `perfil/endereço` do relógio que o cabeçalho da gravação nomeia; `null` até o primeiro link abrir. Só a thread da sessão usa. */
+		private var recordedWatch: String? = null
+
 		override fun onStateChanged(state: ConnectionState, phase: String?) {
 			log(LogLevel.INFO, "onStateChanged", "state=$state phase=$phase")
 			// Depois de um disconnect/forget do usuário não grava: um handshake que chega a READY entre o forgetDevice e a
 			// sessão processar o disconnect regravaria o relógio esquecido, e o próximo processo reconectaria a ele.
 			if (state == ConnectionState.READY && !userDisconnected) savePairing()
 			if (state != ConnectionState.READY && state != ConnectionState.SYNCING) stopSyncWork("state=$state")
+			if (state == ConnectionState.CONFIGURING) recordLinkedWatch()
 			emit("onConnectStateChanged", EventMapper.connectStateChanged(state, phase))
 		}
 
@@ -661,6 +670,31 @@ public class CoreBridge internal constructor(
 			if (entry?.method == METHOD_FORGET) clearForgottenPairing()
 			emitError(requestId, code, message, entry?.method)
 			entry?.token?.reject(code, message)
+		}
+
+		/**
+		 * O link da tentativa abriu (`CONFIGURING`, o primeiro estado em que algum pacote pode ser gravado): se o relógio
+		 * (perfil e endereço) não é o que o cabeçalho já nomeia, o nome passa a ser o dele e o firmware do anterior sai
+		 * (`null`) até o `onDeviceInfo` do novo. Não acontece no pedido de conexão porque uma tentativa que nunca conecta
+		 * não grava nada: no primeiro teste no iPhone (2026-10-30), os pedidos que falharam com o Life Ultra GPS
+		 * renomearam a gravação do fitGPS, que saiu com `device` `"Life Ultra GPS"` e `firmware` `"0.2.1"` (o do fitGPS).
+		 * Os pacotes de antes continuam na gravação (o host só começa outra no `clearLogs`): uma exportação tem um
+		 * cabeçalho só (`docs/fixtures.md`, seção 3.1).
+		 */
+		private fun recordLinkedWatch() {
+			val profileId = session.currentProfileId ?: return
+			val address = session.currentAddress ?: return
+			val profile = DeviceRegistry.byId(profileId) ?: return
+			val watch = "$profileId/$address"
+			if (watch == recordedWatch) return
+			val previous = recordedWatch
+			recordedWatch = watch
+			val name = recordingName(profile)
+			if (previous != null) {
+				host.setRecordingFirmware(null)
+				log(LogLevel.INFO, "recordLinkedWatch", "Recording header now names $name ($profileId); packets recorded before belong to the previous watch")
+			}
+			host.setRecordingDeviceName(name)
 		}
 
 		private fun savePairing() {

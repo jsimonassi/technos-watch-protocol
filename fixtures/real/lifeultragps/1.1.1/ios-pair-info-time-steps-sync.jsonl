@@ -1,0 +1,25 @@
+{"type":"header","device":"Life Ultra GPS","firmware":"1.1.1","platform":"ios","mtu":515,"recordedAt":"2026-10-30T09:35:06.979-03:00","timeZone":"America/Sao_Paulo"}
+{"type":"packet","dir":"TX","atMs":0,"characteristic":"00000af6-0000-1000-8000-00805f9b34fb","hex":"0201"}
+{"type":"packet","dir":"RX","atMs":60,"characteristic":"00000af7-0000-1000-8000-00805f9b34fb","hex":"020166200100000C010001F36202020100010103"}
+{"type":"packet","dir":"TX","atMs":61,"characteristic":"00000af6-0000-1000-8000-00805f9b34fb","hex":"0401F1010102020100"}
+{"type":"packet","dir":"RX","atMs":118,"characteristic":"00000af7-0000-1000-8000-00805f9b34fb","hex":"0401000C00C758F2540887A04327E4E524"}
+{"type":"packet","dir":"TX","atMs":119,"characteristic":"00000af6-0000-1000-8000-00805f9b34fb","hex":"04050C00A04327E4E524671BD5B0EDA3"}
+{"type":"packet","dir":"RX","atMs":1528,"characteristic":"00000af7-0000-1000-8000-00805f9b34fb","hex":"0405000000000000000000000000000000000000"}
+{"type":"packet","dir":"TX","atMs":2547,"characteristic":"00000af6-0000-1000-8000-00805f9b34fb","hex":"0301EA070A1E0923090400000000DC05"}
+{"type":"packet","dir":"RX","atMs":2609,"characteristic":"00000af7-0000-1000-8000-00805f9b34fb","hex":"0301000000000000000000000000000000000000"}
+{"type":"packet","dir":"TX","atMs":7596,"characteristic":"00000af6-0000-1000-8000-00805f9b34fb","hex":"0201"}
+{"type":"packet","dir":"RX","atMs":7648,"characteristic":"00000af7-0000-1000-8000-00805f9b34fb","hex":"020166200100000C010001F36202020100010103"}
+{"type":"packet","dir":"TX","atMs":7649,"characteristic":"00000af6-0000-1000-8000-00805f9b34fb","hex":"02EB"}
+{"type":"packet","dir":"RX","atMs":7710,"characteristic":"00000af7-0000-1000-8000-00805f9b34fb","hex":"02EB01010100000000000002"}
+{"type":"packet","dir":"TX","atMs":7711,"characteristic":"00000af6-0000-1000-8000-00805f9b34fb","hex":"0201"}
+{"type":"packet","dir":"RX","atMs":7769,"characteristic":"00000af7-0000-1000-8000-00805f9b34fb","hex":"020166200100000C010001F36202020100010103"}
+{"type":"packet","dir":"TX","atMs":7769,"characteristic":"00000af6-0000-1000-8000-00805f9b34fb","hex":"02EB"}
+{"type":"packet","dir":"RX","atMs":7828,"characteristic":"00000af7-0000-1000-8000-00805f9b34fb","hex":"02EB01010100000000000002"}
+{"type":"packet","dir":"TX","atMs":10083,"characteristic":"00000af6-0000-1000-8000-00805f9b34fb","hex":"0201"}
+{"type":"packet","dir":"RX","atMs":10139,"characteristic":"00000af7-0000-1000-8000-00805f9b34fb","hex":"020166200100000C010001F36202020100010103"}
+{"type":"packet","dir":"TX","atMs":11869,"characteristic":"00000af6-0000-1000-8000-00805f9b34fb","hex":"0301EA070A1E0923120400000000DC05"}
+{"type":"packet","dir":"RX","atMs":11910,"characteristic":"00000af7-0000-1000-8000-00805f9b34fb","hex":"0301000000000000000000000000000000000000"}
+{"type":"packet","dir":"TX","atMs":15263,"characteristic":"00000af6-0000-1000-8000-00805f9b34fb","hex":"02A0"}
+{"type":"packet","dir":"RX","atMs":15328,"characteristic":"00000af7-0000-1000-8000-00805f9b34fb","hex":"02A039000000070000003B000000000000004F"}
+{"type":"packet","dir":"TX","atMs":18252,"characteristic":"00000af6-0000-1000-8000-00805f9b34fb","hex":"02A0"}
+{"type":"packet","dir":"RX","atMs":18299,"characteristic":"00000af7-0000-1000-8000-00805f9b34fb","hex":"02A039000000070000003B000000000000004F"}

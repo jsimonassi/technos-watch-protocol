@@ -27,7 +27,7 @@ chama a `WatchSession` e muda a forma do dado. A conversão para a ponte do Reac
 | Tipo | Visibilidade | Papel |
 |---|---|---|
 | `CoreBridge` | pública | Um método por método JS do spec (mesmo nome e argumentos; os números do JS como `Double`) e os ganchos do processo (`attach`, `invalidate`, `onHostResume`, `onBluetoothTurnedOff`/`On`, `onScannedDevice`, `onScanFailed`, `onLogEntry`). Dono do listener da sessão, da `RequestRegistry`, da `PendingEvents`, do `userDisconnected` e do sync em andamento. Montado pelo host com a sessão pronta: `CoreBridge(session, logger, host)`. |
-| `CoreHost` | pública (interface) | O que o controlador pede à plataforma, um por processo: `missingScanPermission`, `missingConnectPermission`, `isBluetoothEnabled`, `isValidAddress`, `startScan`/`stopScan`, `startSyncWork`/`stopSyncWork`, `loadPairing`/`savePairing`/`clearPairing`, `setRecordingDeviceName`/`setRecordingFirmware`, `logEntries`, `exportLogs` (`@Throws`), `clearLogs`, `setLogLevel`. |
+| `CoreHost` | pública (interface) | O que o controlador pede à plataforma, um por processo: `missingScanPermission`, `missingConnectPermission`, `isBluetoothEnabled`, `isValidAddress`, `startScan`/`stopScan`, `startSyncWork`/`stopSyncWork`, `loadPairing`/`savePairing`/`clearPairing`, `setRecordingDeviceName`/`setRecordingFirmware` (firmware anulável), `logEntries`, `exportLogs` (`@Throws`), `clearLogs`, `setLogLevel`. |
 | `CoreEventSink` | pública (interface) | A instância atual do módulo JS: `canEmit()` e `emit(name, payload)`. Separado do `CoreHost` porque o módulo é recriado a cada reload do JS. |
 | `CoreCompletion` | pública (interface) | `resolve(value)`/`reject(code, message)`, no lugar da Promise do React Native. Valores: `null`, `Boolean`, `String`, `Map`, `List` de `Map`. |
 | `CorePairing` | pública | O relógio salvo: `address`, `profileId`, `name`. |
@@ -71,6 +71,9 @@ Foundation no código comum. O `:protocol` nunca depende daqui.
   próximo `pairDevice`/`startPairingAttempt`); o `forgetDevice` apaga ao ser pedido e de novo quando a sessão conclui, se
   ninguém pediu outro pareamento no meio. A reconexão automática exige pareamento salvo, ninguém ter desconectado, sessão
   em `DISCONNECTED`/`BLUETOOTH_OFF`, Bluetooth ligado e permissão de conexão.
+- `CoreBridge`: o cabeçalho da gravação só passa a nomear um relógio quando o link dele abre (`CONFIGURING`), nunca no
+  pedido de conexão; ao trocar de relógio (perfil ou endereço), o firmware do anterior vai `null` até o `onDeviceInfo`
+  do novo, e outro link do mesmo relógio não chama o host (ADR 24).
 - `CoreBridge`: o trabalho em segundo plano liga no `onSyncStarted` (antes do evento) e desliga uma vez, no fim do sync,
   no erro do sync ou com a sessão fora de `READY`/`SYNCING`; o erro de outro pedido não o desliga.
 - `CoreBridge`: o `attach` do mesmo `CoreEventSink` não entrega a fila de novo; o `invalidate` rejeita com `CANCELLED`

@@ -97,7 +97,7 @@ internal class FakeCoreHost(private val journal: Journal) : CoreHost {
 
 	override fun setRecordingDeviceName(name: String) = journal.add("host setRecordingDeviceName $name")
 
-	override fun setRecordingFirmware(firmware: String) = journal.add("host setRecordingFirmware $firmware")
+	override fun setRecordingFirmware(firmware: String?) = journal.add("host setRecordingFirmware $firmware")
 
 	override fun logEntries(limit: Int): List<CoreLogEntry> {
 		queries += "logEntries($limit)"

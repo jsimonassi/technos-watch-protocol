@@ -488,6 +488,8 @@ internal class SessionEngine(
 		when {
 			// UNBIND em andamento: a conclusão do disconnect faz o resto.
 			current.closing -> teardown(current, WatchErrorCodes.CANCELLED, reason)
+			// Vínculo do sistema apagado no relógio: em qualquer modo e etapa, nenhuma tentativa nova passaria (ADR 23).
+			event.status == GattStatus.PAIRING_REMOVED -> stopOnPairingRemoved(current, reason)
 			current.mode == HandshakeMode.FIRST_PAIR && !current.ready -> {
 				teardown(current, WatchErrorCodes.DISCONNECTED, reason)
 				setState(ConnectionState.DISCONNECTED, reason)
@@ -547,7 +549,7 @@ internal class SessionEngine(
 			?: throw WatchException(WatchErrorCodes.TRANSPORT, "service discovery not answered after $DISCOVERY_TIMEOUT_MS ms")
 		if (pendingDiscovery === discovery) pendingDiscovery = null
 		if (discovered.status != GattStatus.SUCCESS) {
-			throw WatchException(WatchErrorCodes.TRANSPORT, "service discovery failed, status=${discovered.status}")
+			throw WatchException(failureCode(discovered.status), "service discovery failed, status=${discovered.status}")
 		}
 		val candidate = chooseCandidate(profile, discovered.services)
 			?: throw WatchException(
@@ -567,7 +569,7 @@ internal class SessionEngine(
 					"enableNotifications on $characteristic not answered after ${quirks.commandTimeoutMs} ms",
 				)
 			if (cccd.status != GattStatus.SUCCESS) {
-				throw WatchException(WatchErrorCodes.TRANSPORT, "enableNotifications on $characteristic failed, status=${cccd.status}")
+				throw WatchException(failureCode(cccd.status), "enableNotifications on $characteristic failed, status=${cccd.status}")
 			}
 		}
 		if (quirks.requestMtu <= SessionDriverLink.DEFAULT_MTU) {
@@ -641,6 +643,11 @@ internal class SessionEngine(
 
 	private fun onAttemptFailed(attempt: Attempt, error: WatchException) {
 		if (!isCurrent(attempt)) return
+		if (error.code == WatchErrorCodes.PAIRING_REMOVED) {
+			// Antes da tradução do primeiro pareamento: no HANDSHAKING ela viraria HANDSHAKE_FAILED e esconderia a causa.
+			stopOnPairingRemoved(attempt, error.message)
+			return
+		}
 		if (attempt.mode == HandshakeMode.FIRST_PAIR && !attempt.ready) {
 			val code = when {
 				error.code == WatchErrorCodes.DISCONNECTED -> WatchErrorCodes.DISCONNECTED
@@ -669,6 +676,34 @@ internal class SessionEngine(
 		disconnectTransport("reconnect attempt failed")
 		scheduleReconnect("reconnect attempt failed: ${error.code} ${error.message}")
 	}
+
+	/**
+	 * O relógio apagou o vínculo do sistema que o telefone ainda guarda (`GattStatus.PAIRING_REMOVED`, ADR 23). Encerra a
+	 * tentativa em qualquer modo e etapa (conexão direta ou pendente, configuração, handshake, link pronto que caiu), vai
+	 * para `DISCONNECTED` e não agenda outra: o sistema recusa toda conexão até o usuário esquecer o relógio nas
+	 * configurações de Bluetooth, e repetir só gira o rádio. Comandos em andamento falham com `DISCONNECTED`, como em
+	 * qualquer queda. O `pair`/`reconnect` pendente termina com `PAIRING_REMOVED`; sem pedido (a reconexão que a sessão
+	 * começou sozinha depois de uma queda ou do Bluetooth religado), o erro sai com [WatchSession.NO_REQUEST_ID], senão
+	 * o host veria só um `DISCONNECTED` sem motivo. Como no LOGIN recusado (ADR 11), [bonded] volta a `false`: religar o
+	 * Bluetooth não reconecta sozinho, e cada `reconnect`/`pair` do host é uma tentativa só.
+	 */
+	private fun stopOnPairingRemoved(attempt: Attempt, detail: String) {
+		val message = "$PAIRING_REMOVED_HINT ($detail)"
+		teardown(attempt, WatchErrorCodes.DISCONNECTED, message)
+		// Numa queda o host já fechou (transporte inativo, nada a contar); numa falha da configuração o link ainda está aberto.
+		disconnectTransport("pairing removed")
+		bonded = false
+		setState(ConnectionState.DISCONNECTED, "pairing removed by the watch: $detail")
+		if (lifecycle != null) {
+			failLifecycle(WatchErrorCodes.PAIRING_REMOVED, message)
+		} else {
+			error(WatchSession.NO_REQUEST_ID, WatchErrorCodes.PAIRING_REMOVED, message, "pairingRemoved")
+		}
+	}
+
+	/** Código de uma operação da configuração que falhou: `PAIRING_REMOVED` para o vínculo apagado (ADR 23), senão `TRANSPORT`. */
+	private fun failureCode(status: Int): String =
+		if (status == GattStatus.PAIRING_REMOVED) WatchErrorCodes.PAIRING_REMOVED else WatchErrorCodes.TRANSPORT
 
 	/** Volta a tentar com espera crescente (2 s, 4 s, 8 s… até 60 s); zera quando chega em READY. */
 	private fun scheduleReconnect(reason: String) {
@@ -1013,5 +1048,9 @@ internal class SessionEngine(
 
 		/** Teto da espera entre tentativas de reconexão. */
 		const val RECONNECT_MAX_DELAY_MS: Long = 60_000
+
+		/** Começo da mensagem de `PAIRING_REMOVED`: o que o usuário tem de fazer, porque o app não consegue (ADR 23). */
+		const val PAIRING_REMOVED_HINT: String =
+			"the watch erased the Bluetooth pairing this phone still keeps; forget the watch in the phone's Bluetooth settings and pair again"
 	}
 }

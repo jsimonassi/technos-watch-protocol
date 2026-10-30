@@ -168,11 +168,13 @@ stateDiagram-v2
 	DISCONNECTED --> CONNECTING: pair (connect autoReconnect=false, timeout connectTimeoutMs)
 	DISCONNECTED --> RECONNECTING: reconnect (connect autoReconnect=true, sem timeout)
 	CONNECTING --> CONFIGURING: onConnected
-	CONNECTING --> DISCONNECTED: timeout (CONNECT_TIMEOUT) ou queda (DISCONNECTED)
+	CONNECTING --> DISCONNECTED: timeout (CONNECT_TIMEOUT), queda (DISCONNECTED) ou vínculo apagado (PAIRING_REMOVED)
 	RECONNECTING --> CONFIGURING: onConnected
+	RECONNECTING --> DISCONNECTED: vínculo apagado no relógio (PAIRING_REMOVED, sem nova tentativa)
 	CONFIGURING --> HANDSHAKING: serviços + CCCD + MTU ok
 	CONFIGURING --> DISCONNECTED: falha no primeiro pareamento (GATT_NOT_SUPPORTED, TRANSPORT)
 	CONFIGURING --> RECONNECTING: falha em modo reconexão (nova tentativa com espera)
+	CONFIGURING --> DISCONNECTED: vínculo apagado, em qualquer modo (PAIRING_REMOVED)
 	HANDSHAKING --> READY: handshake ok (onCompleted do pair/reconnect)
 	HANDSHAKING --> DISCONNECTED: FIRST_PAIR falhou (HANDSHAKE_FAILED) ou o link caiu (DISCONNECTED)
 	HANDSHAKING --> RECONNECTING: RECONNECT sem resposta ou o link caiu (nova tentativa com espera)
@@ -180,6 +182,7 @@ stateDiagram-v2
 	READY --> SYNCING: syncHistory
 	SYNCING --> READY: fim do sync (sucesso ou erro)
 	READY --> RECONNECTING: queda do link (comandos falham com DISCONNECTED)
+	READY --> DISCONNECTED: queda com vínculo apagado (PAIRING_REMOVED com NO_REQUEST_ID)
 	SYNCING --> RECONNECTING: queda do link
 	READY --> DISCONNECTED: disconnect (UNBIND antes, se forget)
 	DISCONNECTED --> BLUETOOTH_OFF: Bluetooth desligado
@@ -189,7 +192,7 @@ stateDiagram-v2
 	BLUETOOTH_OFF --> DISCONNECTED: Bluetooth ligado, nada a reconectar
 ```
 
-O diagrama omite, para legibilidade, as setas de `disconnect` e de "Bluetooth desligado" saindo de todos os estados: as duas valem de qualquer estado. O código está em `session/SessionEngine.kt`.
+O diagrama omite, para legibilidade, as setas de `disconnect` e de "Bluetooth desligado" saindo de todos os estados: as duas valem de qualquer estado. Também omite as de `PAIRING_REMOVED` saindo de `HANDSHAKING` e de `SYNCING`, que levam a `DISCONNECTED` como as desenhadas. O código está em `session/SessionEngine.kt`.
 
 **CONNECTING** (só no primeiro pareamento). `Transport.connect(address, autoReconnect = false)` e um timeout de `Quirks.connectTimeoutMs` (30 s no fitGPS). Sem `onConnected` a tempo: `Transport.disconnect`, `DISCONNECTED`, `onError(CONNECT_TIMEOUT)`.
 
@@ -213,6 +216,8 @@ O diagrama omite, para legibilidade, as setas de `disconnect` e de "Bluetooth de
 
 **BLUETOOTH_OFF.** Bluetooth desligado: a tentativa é derrubada (comandos com `DISCONNECTED`; um `pair` em andamento falha com `DISCONNECTED`; um `reconnect` pendente continua pendente). A sessão não espera `onDisconnected` nenhum (contrato B, ADR 18): zera a contagem de desconexões esperadas, marca o transporte inativo e chama `Transport.disconnect` só para o host liberar recursos, sem contar. `pair` com Bluetooth desligado falha com `TRANSPORT`; `reconnect` também, mas a sessão guarda o alvo. Ao religar: se houver relógio pareado (chegou a `READY` ou veio de `reconnect`) e o usuário não pediu `disconnect`, vai para `RECONNECTING`; senão, `DISCONNECTED`. Uma conexão pendente que falhar depois de religar tem a espera crescente de sempre.
 
+**Vínculo apagado no relógio (`PAIRING_REMOVED`, ADR 23).** Um `onDisconnected` com `GattStatus.PAIRING_REMOVED` (no iOS, `CBError.peerRemovedPairingInformation`: o telefone guarda um bond que o relógio apagou), ou uma descoberta ou CCCD com esse status, encerra a tentativa em qualquer modo e etapa: comandos com `DISCONNECTED`, `Transport.disconnect` se o link ainda estiver aberto, `DISCONNECTED`, e nenhuma tentativa agendada. O `pair`/`reconnect` pendente termina com `onError(PAIRING_REMOVED)`, mensagem começando por `SessionEngine.PAIRING_REMOVED_HINT`; sem pedido pendente (reconexão da própria sessão), sai `onError(NO_REQUEST_ID, PAIRING_REMOVED, …)`. Como no LOGIN recusado, o relógio deixa de contar como pareado para o Bluetooth religado; um `reconnect`/`pair` do host tenta uma vez.
+
 **pair/reconnect com outra conexão em andamento.** Não existe `BUSY`: a tentativa atual é derrubada (`Transport.disconnect`, comandos e pedido pendente com `CANCELLED`) e a nova começa. `reconnect` para o mesmo relógio já pronto termina na hora; para o mesmo relógio já reconectando, o pedido novo substitui o anterior.
 
 **disconnect(forget).** Para de reconectar e cancela o pedido de ciclo de vida e os comandos (`CANCELLED`). Com `forget` e a sessão pronta, envia UNBIND pelo driver, esperando no máximo `commandTimeoutMs` (falha ou silêncio não impedem o resto). Depois `Transport.disconnect`, `DISCONNECTED`, e, com `forget`, `SampleStore.clear()`, instantâneos zerados e `currentAddress`/`currentProfileId` nulos. Termina com `onCompleted`.
@@ -224,7 +229,7 @@ O diagrama omite, para legibilidade, as setas de `disconnect` e de "Bluetooth de
 - Toda operação com `requestId` termina com exatamente um evento com o mesmo id (já está no KDoc de `Transport`).
 - `Transport.disconnect` termina com **um** `onDisconnected` quando havia link aberto ou conexão pendente, e com nenhum quando não havia. Um host que nunca responde ao cancelar uma conexão pendente faz a sessão ignorar a próxima queda verdadeira antes do próximo `onConnected` (ver `docs/decisoes.md`, ADR 12).
 - O host entrega os eventos na ordem em que aconteceram (um `onDisconnected` antigo antes do `onConnected` novo).
-- Um `connect` que falha sem chegar a conectar termina com **um** `onDisconnected`: a conexão direta que falha e o `connect` que o host recusa na hora (Bluetooth desligado, sem permissão, endereço inválido). Só a conexão pendente (`autoReconnect = true`) que falha antes de conectar pode ficar sem evento, porque o host a mantém até o relógio voltar ou até um `disconnect`. Sem esse evento, um `reconnect` (sem timeout) ficaria preso em `RECONNECTING`; num `pair`, só o timeout de conexão encerraria a tentativa, e o `disconnect` dele contaria uma resposta que não vem (ADR 12).
+- Um `connect` que falha sem chegar a conectar termina com **um** `onDisconnected`: a conexão direta que falha e o `connect` que o host recusa na hora (Bluetooth desligado, sem permissão, endereço inválido). Só a conexão pendente (`autoReconnect = true`) que falha antes de conectar pode ficar sem evento, porque o host a mantém até o relógio voltar ou até um `disconnect`; a exceção é o vínculo apagado no relógio, em que o host não re-arma e entrega o `onDisconnected` com `GattStatus.PAIRING_REMOVED` (ADR 23). Sem esse evento, um `reconnect` (sem timeout) ficaria preso em `RECONNECTING`; num `pair`, só o timeout de conexão encerraria a tentativa, e o `disconnect` dele contaria uma resposta que não vem (ADR 12).
 - **Bluetooth desligado, contrato B** (ADR 18): o host entrega `onBluetoothStateChanged(false)` e nenhum `onDisconnected` pelos links abertos e conexões pendentes que isso derrubou, nem antes nem depois. Depois disso, `disconnect()` não emite nada até um novo `connect()`. Um `onDisconnected` que o host já tinha entregado antes do `onBluetoothStateChanged(false)` (o stack reportou a queda antes do aviso) é uma queda comum: a sessão passa por um `RECONNECTING` breve, com um `connect` para o adaptador que está desligando, e vai para `BLUETOOTH_OFF` quando o aviso chega. Na gravação real, o host Android antigo entregou três `onDisconnected` para um link só, todos fora do contrato B: o primeiro saiu do próprio tratamento do desligamento, logo antes de repassar o aviso (log, ts 1793272958346 e 1793272958357), e a sessão o tratou como essa queda comum; os outros dois chegaram depois do aviso. O host Android agora suprime os três, e a sessão vai direto para `BLUETOOTH_OFF`.
 
 ## 6. Fila de comandos
@@ -259,6 +264,7 @@ Internamente tudo é `WatchException(code, message)`; nada atravessa a API públ
 | `PROTOCOL` | frame inválido, resposta indecifrável, exceção inesperada do driver |
 | `TRANSPORT` | status GATT de falha, host que não confirma uma operação, Bluetooth desligado em `pair`/`reconnect` |
 | `DISCONNECTED` | link caiu com o pedido em andamento ou na fila |
+| `PAIRING_REMOVED` | o host entregou `GattStatus.PAIRING_REMOVED` (o relógio apagou o vínculo do sistema que o telefone guarda) num `onDisconnected`, numa descoberta ou num CCCD, em `pair` ou `reconnect`, em qualquer etapa; sem pedido pendente, com `NO_REQUEST_ID` (ADR 23) |
 | `CANCELLED` | `disconnect`, `close`, ou um `pair`/`reconnect` posterior substituiu o pedido |
 | `NO_DATA`, `BUSY` | reservados; a sessão atual não emite (sono vazio é só log; não há `BUSY`, ver seção 5). O host pode usar `NO_DATA` por conta própria: o Core RN usa quando `getHistorySleep` não tem nenhuma noite gravada |
 
@@ -266,7 +272,7 @@ Internamente tudo é `WatchException(code, message)`; nada atravessa a API públ
 - `pair`/`reconnect`: o pedido fica num campo único da sessão e sai dele ao terminar (sucesso, erro ou substituição).
 - Comandos: `SessionCommand.markFinished()` só devolve `true` uma vez; todo terminal passa por ele. Ao derrubar a conexão, a sessão falha todos os comandos aceitos e ainda não terminados (inclusive um que o canal já entregou ao consumidor, mas que ainda não começou), antes de cancelar o escopo.
 - Recusas imediatas emitem e retornam. Depois de `close`, pedidos novos recebem `CANCELLED` na hora.
-- Comandos internos usam `NO_REQUEST_ID` e nunca emitem `onError`; o host não deve usar `-1` como id.
+- Comandos internos usam `NO_REQUEST_ID` e nunca emitem `onError`; o host não deve usar `-1` como id. O único `onError` com `NO_REQUEST_ID` é o `PAIRING_REMOVED` de uma reconexão que a própria sessão começou (ADR 23); ele não é terminal de nenhum pedido.
 - Teste: `TerminalCallbackInvariantTest` percorre sucesso, recusa, timeout, queda, Bluetooth, substituição, `disconnect(forget)` e `close` e confere um terminal por id.
 
 ## 9. Como um `VendorSdkDriver` entraria
@@ -285,7 +291,7 @@ O resto (fila, sync, store, regra do terminal, listener) não muda.
 - O kit de teste, em `protocol/src/testKit/` (pastas que o `:protocol` e o `:bridge` compilam nos próprios testes; `protocol/src/testKit/README.md`): `FakeTransport` (host síncrono e controlável; `FakeTransport.scriptedIdo` monta o do iDO; `replyBeforeWriteCompleted` entrega a resposta antes da confirmação da escrita), `SmaWatchSimulator` (relógio SMA em nível de byte, compartilhado com os testes do driver), `IdoWatchSimulator` (o Life Ultra GPS em nível de byte, com as respostas do log da SDK, a confirmação do vínculo agendada no tempo virtual, recusa, já vinculado, `pairFlag` 0, `03/01` recusado, respostas curtas e, no meio, pacotes V3 e frames com o mesmo `cmd` e outra `key`), `ReplayDriver` + `PacketMasker` (`TxMasker` do SMA, `IdoTxMasker` do iDO; replay de gravações), `ReplayScenario` e `IdoReplayScenario` (deduzem as ações de uma gravação SMA ou iDO), `RecordingListener`, `SessionTestLogger`, `TestClock`, a `SessionHarness` (`runSession`) e a leitura das gravações nos quatro targets (`RecordingLoader`, o `expect` de arquivo `FixtureFiles`, com os `actual` em `testKitJvm/` e `testKitIos/`). O `:bridge` usa o mesmo kit para testar o `CoreBridge` sobre uma sessão de verdade (seção 13).
 - `commonTest/.../session/`: `WatchSessionLifecycleTest`, `WatchSessionCommandsTest`, `BluetoothOffContractTest` (contrato B), `TerminalCallbackInvariantTest`, `HistoryStoreTest`, `IdoSessionTest` (o Life Ultra GPS pela sessão: CCCD `0af7` e `0af2`, bind com confirmação, recusa, timeout, bind sem reenvio, reconexão sem autenticação, comandos, resposta antes da confirmação da escrita, `03/01` recusado, passos do dia, esquecer). Todos com `runTest` e tempo virtual; `runSession` fecha a sessão mesmo quando uma asserção falha (senão uma reconexão em ciclo não deixaria o teste terminar).
 - `commonTest/.../testing/` tem o que é só do `:protocol`: `SyntheticFitGpsFixture` e o replay em tempo real, `RealtimeReplay` e a `HostQueue` (fila serial do host, `expect`/`actual`; os `actual` em `src/jvmSharedTest/`, compilado por `jvmTest` e `androidUnitTest`, e em `iosTest/`).
-- `commonTest/.../session/RealFixturesReplayTest` (toda gravação SMA em `fixtures/real/` e a sintética, uma linha `REPLAY` por arquivo no stdout de cada target; as de outra família saem como `skipped`) e `IdoRealFixturesReplayTest` (as gravações iDO, com `IdoReplayScenario` e `IdoTxMasker`) e `RealtimeReplayTest` (a gravação real no dispatcher de produção, em tempo real, seção 4; linha `REALTIME-REPLAY`); `SessionThreadingTest` (o dispatcher dos construtores públicos é serial; o logger nas consultas síncronas, seção 4).
+- `commonTest/.../session/RealFixturesReplayTest` (toda gravação SMA em `fixtures/real/` e a sintética, uma linha `REPLAY` por arquivo no stdout de cada target; as de outra família saem como `skipped`) e `IdoRealFixturesReplayTest` (as gravações iDO, com `IdoReplayScenario` e `IdoTxMasker`, e os valores de cada gravação nomeada), `RealFixturesStepsTest` (o total do dia das gravações reais do fitGPS; linha `STEPS-DAY`), `RealFixturesSleepTest` (a noite da gravação do iPhone contra a saída da SDK; linha `SLEEP`) e `RealtimeReplayTest` (a gravação real no dispatcher de produção, em tempo real, seção 4; linha `REALTIME-REPLAY`); `SessionThreadingTest` (o dispatcher dos construtores públicos é serial; o logger nas consultas síncronas, seção 4).
 - `jvmTest/`: só o que precisa da JVM: `RecordingLoaderTest` (o `java.time` como oráculo do `recordedAt`), `SmaSessionReplayTest` (gravação sintética de ponta a ponta e a regravação com `FIXTURES_REGENERATE=1`), `Hci2JsonlTest` (roda o `python3`).
 - `iosTest/.../ios/ByteBridgeTest`: a ponte de bytes do iOS (seção 11).
 
@@ -379,7 +385,7 @@ flowchart LR
 | Ordem das checagens e as rejeições antecipadas (`PERMISSION_DENIED`, `BLUETOOTH_OFF`, `INVALID_ARGUMENT`, `UNSUPPORTED_DEVICE`), cada uma com `onError` (`requestId` `-1`) antes do `reject` | Responder às consultas: permissão de scan e de conexão, Bluetooth ligado, endereço válido (MAC no Android, UUID no iOS) |
 | `resolveProfile(name)` (`appName`, nome BLE ou `id`), o `requestId` de cada comando (`RequestRegistry`) e a liquidação no callback terminal | Embrulhar a Promise numa `CoreCompletion` (no iOS, o valor passa pelo `FoundationConverter`) |
 | A fila de eventos (`PendingEvents`) e quando entregá-la: no `attach`, a cada evento, no `onHostResume` | Ser o `CoreEventSink`: `canEmit` e o `emitOnX` de cada nome |
-| Os efeitos do listener, na ordem do host antigo: pareamento salvo em todo `READY` (salvo depois de um disconnect/forget do usuário), trabalho em segundo plano ligado no `onSyncStarted` e desligado no fim, no erro do sync ou fora de `READY`/`SYNCING`, cabeçalho da gravação; depois o evento; depois a liquidação | Executar os efeitos: scan, FGS (Android) ou tarefa de segundo plano (iOS), guardar o pareamento, o cabeçalho da gravação de frames |
+| Os efeitos do listener, na ordem do host antigo: pareamento salvo em todo `READY` (salvo depois de um disconnect/forget do usuário), trabalho em segundo plano ligado no `onSyncStarted` e desligado no fim, no erro do sync ou fora de `READY`/`SYNCING`, cabeçalho da gravação (o nome quando o link de outro relógio abre, em `CONFIGURING`, com o firmware anterior apagado; nome e firmware no `onDeviceInfo`; ADR 24); depois o evento; depois a liquidação | Executar os efeitos: scan, FGS (Android) ou tarefa de segundo plano (iOS), guardar o pareamento, o cabeçalho da gravação de frames |
 | A regra do `NO_DATA` do `getHistorySleep`, a janela do sono (retenção do perfil), o `deletedSavedData` (strings ou mapas, categoria, datas no fuso do telefone) | Converter os argumentos do JS para Kotlin (no Android, `ReadableConverter.toList`, pelo `getType` de cada item) |
 | `userDisconnected`, `reconnectIfPaired` (pareamento salvo, ninguém desconectou, sessão em `DISCONNECTED`/`BLUETOOTH_OFF`, Bluetooth e permissão), `emitCurrentState` | Avisar os ganchos: módulo destruído (`invalidate`), app de volta ao primeiro plano (`onHostResume`), Bluetooth desligado/ligado, relógio achado no scan, falha do scan, entrada nova no log |
 | `getLogs` (entradas → `EventMapper.log`), `setLogLevel` (0..3, inválido só loga) | O log em memória, o export para arquivo e o nível |
@@ -396,7 +402,7 @@ flowchart LR
 | `startScan()` / `stopScan()` | `scan`; `pairDevice`, `stopScan`, Bluetooth desligado | `BleScanner.start/stop` | `scanForPeripherals` sem filtro de serviço / `stopScan` |
 | `startSyncWork()` / `stopSyncWork()` | `onSyncStarted`; fim, erro ou queda do sync | `SyncForegroundService.start/stop` | `beginBackgroundTask` / `endBackgroundTask` |
 | `loadPairing()` / `savePairing()` / `clearPairing()` | `getLastPairedDevice`, reconexão, janela do sono; `READY`; `forgetDevice` (duas vezes) | `PairingPrefs` (`SharedPreferences` `corenext.pairing`) | `UserDefaults` |
-| `setRecordingDeviceName()` / `setRecordingFirmware()` | pareamento, reconexão, `onDeviceInfo` | `FrameRecorder.deviceName/firmware` | o gravador de frames do iOS |
+| `setRecordingDeviceName()` / `setRecordingFirmware()` | link aberto (`CONFIGURING`) de um relógio diferente do que o cabeçalho nomeia (o firmware vai `null`), `onDeviceInfo` | `FrameRecorder.deviceName/firmware` | `FrameRecorder.deviceName/firmware` do iOS |
 | `logEntries(limit)` / `exportLogs()` / `clearLogs()` / `setLogLevel(level)` | `getLogs`, `exportLogs`, `clearLogs`, `setLogLevel` | `RingLogger.entries/writeTo/clear/minLevel`; o `exportLogs` grava frames e log em `getExternalFilesDir(null)/corenext/` | anel em memória + `os_log`; export para o diretório de documentos (`throws` no Swift) |
 
 **Ganchos do processo.** `attach(sink)` na primeira chamada de um método JS de cada instância do módulo (no Android, o antigo `graph()`); `invalidate(sink)` quando a instância morre (rejeita com `CANCELLED`, `"Module invalidated"`, toda Promise pendente); `onHostResume()` ao voltar ao primeiro plano (entrega a fila e reconecta); `onBluetoothTurnedOff()` (para o scan) e `onBluetoothTurnedOn()` (reconecta, chamado depois de o transporte entregar `onBluetoothStateChanged(true)` à sessão); `onScannedDevice`/`onScanFailed` do scanner; `onLogEntry` do logger (o `onLog` não entra na fila). Os três primeiros só para um módulo que se ligou.
@@ -407,7 +413,7 @@ flowchart LR
 |---|---|---|---|---|
 | `initialize`, `initSMASDK` | — | `onConnectStateChanged` do estado atual (fase `null`), relido até ficar estável | `resolve(null)` depois | reconexão automática (`"initialize"`) |
 | `scan` | permissão de scan, Bluetooth | `onError` (`-1`, `method` `scan`) se falhar | sem Promise | `startScan` |
-| `pairDevice` | permissão de conexão, Bluetooth, endereço, nome | os estados da sessão | `resolve(null)` no `READY`; `onError` + `reject` na falha | `stopScan`, `userDisconnected = false`, nome da gravação |
+| `pairDevice` | permissão de conexão, Bluetooth, endereço, nome | os estados da sessão | `resolve(null)` no `READY`; `onError` + `reject` na falha (inclusive `PAIRING_REMOVED`) | `stopScan`, `userDisconnected = false`; o nome da gravação só quando o link abre |
 | `startPairingAttempt` | as mesmas | os estados; `onError` com o método na falha | `resolve(null)` **na hora** | sem `stopScan` |
 | `disconnectCurrentDevice` | — | `DISCONNECTED` | `resolve(null)` | `userDisconnected = true` |
 | `forgetDevice` | — | `DISCONNECTED` | `resolve(null)` | `userDisconnected = true`, `clearPairing` no pedido e de novo no fim, com `onCompleted` ou `onError` (se ninguém pareou no meio) |

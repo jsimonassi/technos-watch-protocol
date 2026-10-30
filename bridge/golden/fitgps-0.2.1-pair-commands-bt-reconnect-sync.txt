@@ -5,8 +5,8 @@ event onConnectStateChanged {"state":0,"sessionState":"DISCONNECTED","phase":nul
 resolve initialize null
 call pairDevice("AA:BB:CC:DD:EE:FF", "fitGPS")
 host stopScan
-host setRecordingDeviceName Mormaii_fitGPS
 event onConnectStateChanged {"state":1,"sessionState":"CONNECTING","phase":null}
+host setRecordingDeviceName Mormaii_fitGPS
 event onConnectStateChanged {"state":1,"sessionState":"CONFIGURING","phase":null}
 event onConnectStateChanged {"state":1,"sessionState":"HANDSHAKING","phase":null}
 event onConnectStateChanged {"state":1,"sessionState":"HANDSHAKING","phase":"BIND"}
@@ -39,7 +39,6 @@ resolve refreshSteps null
 call [host] Bluetooth off, then on
 host stopScan
 event onConnectStateChanged {"state":4,"sessionState":"BLUETOOTH_OFF","phase":null}
-host setRecordingDeviceName Mormaii_fitGPS
 event onConnectStateChanged {"state":0,"sessionState":"RECONNECTING","phase":null}
 event onConnectStateChanged {"state":1,"sessionState":"CONFIGURING","phase":null}
 event onConnectStateChanged {"state":1,"sessionState":"HANDSHAKING","phase":null}

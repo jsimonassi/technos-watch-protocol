@@ -231,6 +231,38 @@ class SmaSleepAnalyzerTest {
 	}
 
 	@Test
+	fun firstRealPageFromTheFitGpsGivesWhatTheSdkGives() {
+		// Os 9 registros do 05/46 de 2026-10-30 (ios-pair-info-time-steps-sleep-sync.jsonl, atMs 50729), na ordem da página:
+		// START muito antes do primeiro estágio, 09:29:38 antes de 09:29:29 e nenhum END.
+		val page = listOf(
+			SmaSleepRecord(0x32767DE8, SmaSleepMode.START, 0, 0),
+			SmaSleepRecord(0x32769CC2, SmaSleepMode.AWAKE, 0, 0),
+			SmaSleepRecord(0x32769DEE, SmaSleepMode.LIGHT, 0, 0),
+			SmaSleepRecord(0x3276A046, SmaSleepMode.DEEP, 0, 0),
+			SmaSleepRecord(0x32771C94, SmaSleepMode.DEEP, 3, 0),
+			SmaSleepRecord(0x32772002, SmaSleepMode.AWAKE, 0, 0),
+			SmaSleepRecord(0x32771FF9, SmaSleepMode.AWAKE, 0, 0),
+			SmaSleepRecord(0x32772018, SmaSleepMode.AWAKE, 4, 0),
+			SmaSleepRecord(0x3277201D, SmaSleepMode.AWAKE, 0, 0),
+		)
+		val night = SmaSleepAnalyzer.nights(page).single()
+		val points = SmaSleepAnalyzer.analyseSleeps(night)
+		// Saída do SmaSleep.java da SDK, compilado e rodado à parte sobre os mesmos registros (docs/sma-dados.md, seção 6).
+		assertEquals(
+			listOf(
+				"29 21:58:00 m2", "29 22:13:00 m1", "30 00:09:38 m3", "30 00:14:38 m2", "30 00:24:38 m1",
+				"30 09:00:00 m2", "30 09:15:00 m2", "30 09:29:29 m3", "30 09:30:05 m34",
+			),
+			points.map {
+				val local = SmaLocalTime.localMillisToWallClock(it.time)
+				val time = listOf(local.hour, local.minute, local.second).joinToString(":") { part -> part.toString().padStart(2, '0') }
+				"${local.dayOfMonth} $time m${it.mode}"
+			},
+		)
+		assertContentEquals(intArrayOf(692, 632, 54, 6), SmaSleepAnalyzer.sleepStatus(points))
+	}
+
+	@Test
 	fun recordsOutOfOrderAreSortedBeforeGrouping() {
 		val sessions = SmaSleepAnalyzer.analyze(
 			listOf(

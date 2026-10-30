@@ -3,6 +3,7 @@ package br.com.grupotechnos.watch.bridge
 import br.com.grupotechnos.watch.protocol.domain.ConnectionState
 import br.com.grupotechnos.watch.protocol.domain.DataKind
 import br.com.grupotechnos.watch.protocol.session.SessionHarness
+import br.com.grupotechnos.watch.protocol.transport.GattStatus
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -50,10 +51,10 @@ class CoreBridgeConnectionTest {
 	fun pairDeviceStopsTheScanSavesThePairingAtReadyAndResolvesAfterTheEvent() = runBridge { b ->
 		val completion = b.completion("pairDevice")
 		b.bridge.pairDevice(ADDRESS, "fitGPS", completion)
-		assertEquals(listOf("host stopScan", "host setRecordingDeviceName Mormaii_fitGPS"), b.journal.lines)
+		assertEquals(listOf("host stopScan"), b.journal.lines, "the recording is named only when the link opens")
 		b.run()
 		assertEquals(
-			listOf("host stopScan", "host setRecordingDeviceName Mormaii_fitGPS") + pairingTrail +
+			listOf("host stopScan", pairingTrail[0], "host setRecordingDeviceName Mormaii_fitGPS") + pairingTrail.drop(1) +
 				listOf(savedFitGps, ready, "resolve pairDevice null"),
 			b.journal.lines,
 		)
@@ -132,10 +133,12 @@ class CoreBridgeConnectionTest {
 	fun startPairingAttemptResolvesAtOnceWithoutStoppingTheScan() = runBridge { b ->
 		b.bridge.userDisconnected = true
 		b.bridge.startPairingAttempt(ADDRESS, "Mormaii_fitGPS", b.completion("startPairingAttempt"))
-		assertEquals(listOf("host setRecordingDeviceName Mormaii_fitGPS", "resolve startPairingAttempt null"), b.journal.lines)
+		assertEquals(listOf("resolve startPairingAttempt null"), b.journal.lines)
 		assertFalse(b.bridge.userDisconnected)
 		assertEquals(1, b.bridge.pendingRequests, "registered without a promise, for the error's method name")
 		b.run()
+		val named = b.journal.lines.indexOf("host setRecordingDeviceName Mormaii_fitGPS")
+		assertEquals(b.journal.lines.indexOf("""event onConnectStateChanged {"state":1,"sessionState":"CONFIGURING","phase":null}""") - 1, named)
 		assertEquals(listOf(ADDRESS to true), b.h.transport.connects)
 		assertEquals(ConnectionState.READY, b.h.session.state)
 		assertTrue(b.journal.lines.contains(savedFitGps))
@@ -336,5 +339,82 @@ class CoreBridgeConnectionTest {
 		b.run()
 		b.advance(4_001)
 		assertTrue(b.h.store.loadConfirmedDays(DataKind.STEPS).isEmpty())
+	}
+
+	@Test
+	fun pairDeviceRefusedBecauseTheWatchRemovedThePairingRejectsWithPairingRemoved() = runBridge { b ->
+		b.host.pairing = CorePairing(ADDRESS, "fitgps", "fitGPS")
+		b.h.transport.connectBehavior = { _, _ -> false }
+		b.bridge.pairDevice(ADDRESS, "fitGPS", b.completion("pairDevice"))
+		b.run()
+		b.journal.clear()
+		b.h.transport.dropLink(GattStatus.PAIRING_REMOVED, "Connect failed (status=-4)")
+		b.run()
+		assertEquals(3, b.journal.lines.size, b.journal.lines.joinToString("\n"))
+		assertEquals("""event onConnectStateChanged {"state":0,"sessionState":"DISCONNECTED","phase":null}""", b.journal.lines[0])
+		val error = b.journal.lines[1]
+		assertTrue(error.startsWith("""event onError {"requestId":1,"code":"PAIRING_REMOVED","message":"the watch erased the Bluetooth pairing"""), error)
+		assertTrue(error.endsWith(""""method":"pairDevice"}"""), error)
+		assertTrue(b.journal.lines[2].startsWith("reject pairDevice PAIRING_REMOVED the watch erased the Bluetooth pairing"), b.journal.lines[2])
+		assertEquals(CorePairing(ADDRESS, "fitgps", "fitGPS"), b.host.pairing, "kept for the reconnect after the user forgets the watch in Settings")
+		b.advance(120_000)
+		assertEquals(1, b.h.transport.connects.size)
+	}
+
+	@Test
+	fun pairingRemovedAfterADropIsAnErrorEventWithoutMethodAndTheSessionStops() = runBridge { b ->
+		b.pairReady()
+		b.h.transport.dropLink(GattStatus.PAIRING_REMOVED, "Link lost (status=-4)")
+		b.run()
+		assertEquals(
+			listOf("""event onConnectStateChanged {"state":0,"sessionState":"DISCONNECTED","phase":null}"""),
+			b.journal.starting("event onConnectStateChanged"),
+			"no RECONNECTING",
+		)
+		val error = b.journal.starting("event onError").single()
+		assertTrue(error.startsWith("""event onError {"requestId":-1,"code":"PAIRING_REMOVED""""), error)
+		assertTrue(error.endsWith(""""method":null}"""), error)
+		assertTrue(b.journal.starting("reject").isEmpty())
+		assertEquals(CorePairing(ADDRESS, "fitgps", "fitGPS"), b.host.pairing)
+		b.advance(120_000)
+		assertEquals(1, b.h.transport.connects.size)
+	}
+
+	@Test
+	fun recordingIsNamedOnlyWhenALinkOpensAndDropsThePreviousWatchFirmware() = runBridge { b ->
+		b.pairReady()
+		b.bridge.getDeviceInfo(b.completion("getDeviceInfo"))
+		b.run()
+		assertEquals(listOf("host setRecordingFirmware 1.2.3", "host setRecordingDeviceName Mormaii_fitGPS"), b.journal.starting("host setRecording"))
+		b.journal.clear()
+		// O primeiro teste no iPhone: pedidos ao Life Ultra GPS que nunca conectam não podem renomear a gravação do fitGPS.
+		b.h.transport.connectBehavior = { _, _ -> false }
+		b.bridge.pairDevice(ADDRESS, "Life Ultra GPS", b.completion("pairDevice"))
+		b.run()
+		b.h.transport.dropLink(GattStatus.PAIRING_REMOVED, "Connect failed (status=-4)")
+		b.run()
+		b.bridge.startPairingAttempt(ADDRESS, "Life Ultra GPS", b.completion("startPairingAttempt"))
+		b.run()
+		b.h.transport.dropLink(GattStatus.PAIRING_REMOVED, "Connect failed (status=-4)")
+		b.run()
+		assertTrue(b.journal.starting("host setRecording").isEmpty(), b.journal.lines.joinToString("\n"))
+		// Um link do Life Ultra GPS que abre (o transporte de teste só tem o serviço do fitGPS, e a configuração falha depois).
+		b.h.transport.connectBehavior = { _, _ -> true }
+		b.bridge.pairDevice(ADDRESS, "Life Ultra GPS", b.completion("pairDevice"))
+		b.run()
+		val configuring = b.journal.lines.indexOf("""event onConnectStateChanged {"state":1,"sessionState":"CONFIGURING","phase":null}""")
+		assertEquals(
+			listOf("host setRecordingFirmware null", "host setRecordingDeviceName Life Ultra GPS"),
+			b.journal.lines.subList(configuring - 2, configuring),
+			"effects before the event; the fitGPS firmware leaves the header",
+		)
+		assertEquals(2, b.journal.starting("host setRecording").size)
+		assertTrue(b.logger.withTag("CoreBridge/recordLinkedWatch").single().startsWith("Recording header now names Life Ultra GPS (lifeultragps)"))
+		// Outro link do mesmo relógio não mexe no cabeçalho.
+		b.journal.clear()
+		b.bridge.pairDevice(ADDRESS, "Life Ultra GPS", b.completion("pairDevice"))
+		b.run()
+		assertTrue(b.journal.lines.contains("""event onConnectStateChanged {"state":1,"sessionState":"CONFIGURING","phase":null}"""))
+		assertTrue(b.journal.starting("host setRecording").isEmpty(), b.journal.lines.joinToString("\n"))
 	}
 }

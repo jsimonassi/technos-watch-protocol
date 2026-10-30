@@ -30,7 +30,9 @@ public interface Transport {
 	 * direta que falha e o `connect` que o host recusa na hora (Bluetooth desligado, sem permissão, endereço inválido).
 	 * Só a conexão pendente (`autoReconnect = true`) que falha antes de conectar pode ficar sem evento, porque o host a
 	 * mantém até o relógio voltar ou até um [disconnect]. Sem esse evento, a reconexão, que não tem timeout, ficaria
-	 * presa (`docs/arquitetura.md`, seção 5).
+	 * presa (`docs/arquitetura.md`, seção 5). A exceção é a falha que nenhuma nova tentativa resolve, o vínculo do
+	 * sistema apagado no relógio: o host não re-arma e encerra a conexão pendente com um `onDisconnected`
+	 * ([GattStatus.PAIRING_REMOVED], `docs/decisoes.md`, ADR 23).
 	 *
 	 * @param address MAC no Android, UUID do periférico no iOS.
 	 * @param autoReconnect `false` no primeiro pareamento (conexão direta, rápida); `true` em reconexão,

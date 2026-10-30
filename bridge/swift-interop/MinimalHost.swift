@@ -270,9 +270,12 @@ func describeConstants() -> [String] {
 	let codes = WatchErrorCodes.shared
 	let errorCodes: [String] = [
 		codes.BUSY, codes.CANCELLED, codes.CONNECT_TIMEOUT, codes.DISCONNECTED, codes.GATT_NOT_SUPPORTED, codes.HANDSHAKE_FAILED,
-		codes.NOT_READY, codes.NO_DATA, codes.PROTOCOL, codes.TIMEOUT, codes.TRANSPORT, codes.UNSUPPORTED_DEVICE,
+		codes.NOT_READY, codes.NO_DATA, codes.PAIRING_REMOVED, codes.PROTOCOL, codes.TIMEOUT, codes.TRANSPORT, codes.UNSUPPORTED_DEVICE,
 	]
-	let statuses: [Int32] = [GattStatus.shared.SUCCESS, GattStatus.shared.NOT_CONNECTED, GattStatus.shared.NOT_FOUND, GattStatus.shared.TIMEOUT]
+	let statuses: [Int32] = [
+		GattStatus.shared.SUCCESS, GattStatus.shared.NOT_CONNECTED, GattStatus.shared.NOT_FOUND, GattStatus.shared.TIMEOUT,
+		GattStatus.shared.PAIRING_REMOVED,
+	]
 	let levels: [LogLevel] = [LogLevel.debug, LogLevel.info, LogLevel.warn, LogLevel.error]
 	let directions: [FrameDirection] = [FrameDirection.tx, FrameDirection.rx]
 	let writeTypes: [WriteType] = [WriteType.withResponse, WriteType.withoutResponse]
@@ -368,7 +371,7 @@ final class MinimalCoreHost: NSObject, CoreHost {
 
 	func setRecordingDeviceName(name: String) { effects.append("device \(name)") }
 
-	func setRecordingFirmware(firmware: String) { effects.append("firmware \(firmware)") }
+	func setRecordingFirmware(firmware: String?) { effects.append("firmware \(firmware ?? "nil")") }
 
 	func logEntries(limit: Int32) -> [CoreLogEntry] { Array(entries.prefix(Int(max(0, limit)))) }
 

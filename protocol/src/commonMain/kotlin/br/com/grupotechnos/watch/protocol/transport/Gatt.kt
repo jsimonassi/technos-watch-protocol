@@ -15,7 +15,9 @@ public enum class WriteType {
  * Códigos de status que o host usa ao chamar [TransportEvents].
  *
  * Qualquer valor diferente de [SUCCESS] é tratado como falha. O host pode repassar o status nativo
- * (status GATT no Android, `NSError.code` no iOS); ele só aparece em log e na mensagem de erro.
+ * (status GATT no Android, `NSError.code` no iOS); ele só aparece em log e na mensagem de erro. Os valores negativos
+ * desta lista são neutros de plataforma e não colidem com os nativos (que são positivos); só [PAIRING_REMOVED] muda o
+ * que a sessão faz.
  */
 public object GattStatus {
 	/** A operação terminou com sucesso (igual a `BluetoothGatt.GATT_SUCCESS` no Android). */
@@ -29,6 +31,20 @@ public object GattStatus {
 
 	/** O serviço ou a characteristic pedidos não existem no relógio. */
 	public const val NOT_FOUND: Int = -3
+
+	/**
+	 * O telefone guarda um vínculo Bluetooth do sistema (o bond, com a chave LTK) que o relógio já apagou, e o sistema
+	 * recusa a conexão até o usuário esquecer o relógio nas configurações de Bluetooth do telefone. Nenhum app consegue
+	 * remover esse vínculo, e tentar de novo dá sempre o mesmo resultado.
+	 *
+	 * No iOS é o `CBError.peerRemovedPairingInformation` (código 14 no domínio `CBErrorDomain`): no primeiro teste no
+	 * iPhone (2026-10-30), o Life Ultra GPS tinha sido pareado com esse iPhone pelo app de produção e depois com um
+	 * Android; todo `connect` falhou em 0,3 a 3 s com esse erro até o vínculo ser esquecido nos Ajustes. O host entrega o
+	 * status no `onDisconnected` da conexão que falhou (inclusive a pendente, que nesse caso não re-arma) ou do link que
+	 * caiu. A sessão encerra a tentativa com `WatchErrorCodes.PAIRING_REMOVED`, vai para `DISCONNECTED` e não reconecta
+	 * sozinha; também aceita o status numa operação da configuração (descoberta, CCCD). `docs/decisoes.md`, ADR 23.
+	 */
+	public const val PAIRING_REMOVED: Int = -4
 }
 
 /**

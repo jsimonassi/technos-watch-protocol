@@ -22,9 +22,11 @@ public class TransportEvents internal constructor(
 	}
 
 	/**
-	 * O link fechou, por pedido (`Transport.disconnect`) ou por queda.
+	 * O link fechou, por pedido (`Transport.disconnect`) ou por queda, ou um `connect` terminou sem conectar.
 	 *
-	 * @param status status nativo da desconexão, só para log.
+	 * @param status status nativo da desconexão, para log e mensagem; a exceção é [GattStatus.PAIRING_REMOVED] (o
+	 * relógio apagou o vínculo do sistema que o telefone guarda), com que a sessão desiste da conexão em vez de
+	 * reconectar (`docs/decisoes.md`, ADR 23).
 	 * @param message descrição curta, só para log.
 	 */
 	public fun onDisconnected(status: Int, message: String) {
