@@ -34,15 +34,19 @@ O `03/05` pode limpar o histórico do relógio e misturar o resultado, por isso 
   - **Fecha H2 para o sono**: o segundo sync volta com 0 páginas (apagado depois da leitura), só com registros novos, ou com as 64 páginas de novo? Se voltar tudo, a sessão relê o histórico inteiro a cada sync e o custo do item técnico 1 vale para todo sync.
   - **Mede o sync de 59 s**: a duração se repete no segundo sync? Quanto custa cada página (hoje cerca de 900 ms)?
   - Registrar em: linha H2 da tabela de `protocolo-sma.md`, seção 8; `sma-dados.md`, seção 6; fixture `sync-twice.jsonl` com a procedência em `fixtures.md`, seção 5.
+  - Indício de 2026-10-29 21:37 (`pair-commands-sync-bt-reconnect-disconnect-reconnect.jsonl`): o Sync da noite trouxe o `05/46` vazio (`atMs` 39035), contra as 64 páginas da manhã, e levou 1,2 s. Não fecha o H2: entre as duas gravações o relógio mandou 12 frames não gravados (seq 79 a 90) e a sessão da noite começou com BIND, então pode ter havido um `03/05` no meio. Como o relógio não tem mais histórico de sono, este bloco só fecha depois de uma noite com ele (T3).
 - [ ] Opcional, com o botão de depuração: pular o ACK de uma página `05/42` e repetir o `05/41`. É o teste do H1 (item técnico 5).
 
 ### 2. Disconnect, Forget e novo pareamento (A7, H7, A3 a A5, A8)
 
-- [ ] **Disconnect** e esperar 60 s sem reconexão; **Reconnect last** (só `03/03`, sem BIND).
+- [x] **Disconnect** e esperar 60 s sem reconexão; **Reconnect last** (só `03/03`, sem BIND).
+  - Feito em 2026-10-29: Disconnect (log, ts 1793320739940), 71 s sem reconexão e Reconnect last só com LOGIN (`atMs` 187070 de `pair-commands-sync-bt-reconnect-disconnect-reconnect.jsonl`).
 - [ ] **Forget**: `03/05 [00]` com ACK, estado `DISCONNECTED`, store vazio, "Último pareado: nenhum".
   - Fecha **A7**. Registrar em `fixtures.md`, seção 5 (fixture `disconnect-reconnect-forget.jsonl`).
+  - Em 2026-10-29 o Forget e o novo pareamento funcionaram, segundo o usuário, mas não estão na gravação da noite.
 - [ ] Scan e pair **olhando a tela do relógio no BIND**: ele pede toque? Quanto tempo do ACK do BIND até o `03/02`?
   - Fecha **H7**. Sem pedido de toque e com o `03/02` em poucos segundos, o `bindTimeoutMs` de 60 s pode cair (`decisoes.md`, ADR 4). Registrar na linha H7 da seção 8 de `protocolo-sma.md` e na ADR 4.
+  - Na gravação de 2026-10-29 21:37, o `03/02` chegou 1,9 s depois do BIND (`atMs` 0 a 1899), contra 2,2 s de manhã. Falta confirmar se o relógio pediu toque.
 - [ ] Bateria e versão comparadas com a tela do relógio (A4).
 - [ ] **Set time com a hora do celular adiantada 5 min**, conferir a tela do relógio, depois voltar à hora automática (A5). Na gravação de 2026-10-29 o Set time do usuário (`atMs` 778427) mandou a mesma hora que o acerto automático já tinha posto, então a tela não mudou.
 - [ ] Share e Export (A8). Fixture limpa `pair-basics.jsonl`.
@@ -59,9 +63,11 @@ O `03/05` pode limpar o histórico do relógio e misturar o resultado, por isso 
 
 - [ ] Fora de alcance por mais de 2 min e volta: um `onDisconnected`, `RECONNECTING` sem timeout e `READY` sozinho ao voltar.
 - [ ] Fora de alcance e Bluetooth desligado e religado: nenhum `onDisconnected` depois do `onBluetoothStateChanged(false)` (contrato B, `decisoes.md`, ADR 18) e reconexão ao religar.
+  - Parte com o relógio em alcance feita em 2026-10-29: Bluetooth desligado em `READY` sem nenhum `onDisconnected` (log, ts 1793320703419, `transport stopped without onDisconnected (active=true)`) e reconexão sozinha, só com LOGIN, 7 s depois de religar (ts 1793320722176 a 1793320729137). Falta o caso fora de alcance.
 - [ ] Bluetooth desligado **durante** o sync: o sync termina com `onError(DISCONNECTED)`, o estado vai para `BLUETOOTH_OFF` e volta a `READY` depois de religar. Bateria pedida durante o sync espera na fila.
 - [ ] Sync com o app em segundo plano e a tela apagada (serviço em primeiro plano do Repo 2).
 - [ ] `adb shell am force-stop` e reabrir; abrir o app com o Bluetooth desligado e um pareamento salvo (o último estado que o JS vê deve ser `BLUETOOTH_OFF`, não `DISCONNECTED`; o primeiro `initialize()` pode reenviar 0 antes, `docs/api-js.md` do Repo 2); reload do JS em `READY` e em `SYNCING`.
+  - Abrir com o Bluetooth desligado **sem** pareamento salvo, feito em 2026-10-29: estado `BLUETOOTH_OFF` (log, ts 1793320602042, `reportBluetoothOffAtStartup`). Faltam o caso com pareamento salvo, o force-stop e o reload.
 - Fecha: a metade "conexão pendente" da ADR 12 e o contrato B no aparelho. Registrar em: `arquitetura.md`, seção 5, se algum comportamento divergir; ADRs 12 e 18; `docs/transporte-android.md` no Repo 2; uma fixture por caso (`robustness-<caso>.jsonl`).
 
 ### 5. H8 cruzado com o app iOS de produção (por último)
@@ -98,10 +104,12 @@ O `syncHistory` da gravação real levou 59,3 s, quase todo nas 64 páginas de s
 - [ ] **`requestConnectionPriority(HIGH)` durante o sync.** A própria SDK SMA pede prioridade alta de conexão nas transferências grandes (`requestHighSpeedMode`, `SmaManager.java:1458`, que vira `requestConnectionPriority`, `SmaMessenger.java:163`; usado em `:485`, `:1131` e `:1191`, no XMODEM, no envio de arquivo e no stream), mas nunca na leitura de histórico, e isso não foi testado aqui. Pedir no host Android ao começar o sync e voltar ao normal no fim deve encurtar o intervalo de conexão (o log sugere ~180 ms depois do login, sem HCI snoop que confirme). Fecha: duração por página medida com e sem, no mesmo relógio. Registrar numa ADR nova em `decisoes.md` e na seção 8 de `protocolo-sma.md`.
 - [ ] **Tipo de escrita do ACK.** O driver escreve tudo com `WITH_RESPONSE` (`SmaDriver.writeControl`), e a recepção só entrega a página depois que a escrita do ACK é confirmada: é a espera de ~358 ms por página. Duas saídas: escrever o ACK com `WITHOUT_RESPONSE`, se a `6e400002` aceitar (as propriedades dela ainda não foram registradas), ou não bloquear a entrega na confirmação da escrita do ACK (estimativa de 900 para 550 ms por página, uns 35 s nas 64 páginas). A segunda mexe na ordem da ADR 2 e precisa do H1. Fecha: duração por página e nenhuma página perdida. Registrar nas ADRs 2 e 5 e na seção 1 de `protocolo-sma.md` (tipo de escrita).
 - Não parar a paginação em páginas antigas: o relógio entrega da mais antiga para a mais nova, então isso nunca chegaria às noites recentes.
+- Sem histórico de sono no relógio, o Sync completo levou 1,2 s (log, ts 1793320666818 a 1793320668031, gravação de 2026-10-29 21:37). Os 59 s aparecem quando há muitas páginas antigas para ler, como no primeiro sync de um relógio usado ou depois de várias noites sem sync.
 
 ### 2. Risco do `HOURLY_SUM`
 
 - [ ] Se o H3 mostrar acumulado do dia, o `HOURLY_SUM` conta de 5 a 14 vezes a mais. A produção usa a mesma soma (`SMAService.java:437-448, 859-866`; `SMAService.m:1277-1288`), o que é um indício fraco de que o valor é por hora. Fecha com o bloco 3 e a conferência no backend. Registrar na ADR 1 e na linha H3.
+  - **Indício novo (2026-10-29 21:37)**: o registro ao vivo do `05/42` da noite (`atMs` 29133 e 38440 de `pair-commands-sync-bt-reconnect-disconnect-reconnect.jsonl`) traz `mode 0` com 56 passos, o mesmo valor do último registro da manhã (08:31, primeira gravação), 13 h depois. Se o relógio ficou parado o dia todo, 56 é o acumulado do dia, e o `HOURLY_SUM` somaria 56 + 56 = 112 para o dia. Se ele andou com alguém, é coincidência. Falta essa resposta; o bloco 3 fecha de qualquer jeito.
 
 ### 3. ADR 16 (deduplicação pelo instante)
 
