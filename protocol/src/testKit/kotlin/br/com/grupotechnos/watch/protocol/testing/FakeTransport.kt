@@ -14,7 +14,8 @@ import br.com.grupotechnos.watch.protocol.transport.WriteType
  * evento de conclusão em [events] (a sessão só processa depois, na thread dela, como num host real).
  *
  * Dois modos de relógio, escolhidos por quem monta o teste:
- * - **Roteiro**: [onWrite] chama um [SmaWatchSimulator] (ver [scripted]), que responde por `cmd/key`.
+ * - **Roteiro**: [onWrite] chama um [SmaWatchSimulator] (ver [scripted]) ou um [IdoWatchSimulator] (ver [scriptedIdo]),
+ *   que responde por `cmd/key`.
  * - **Replay**: [onWrite] e [onNotificationsEnabled] são ligados a um [ReplayDriver], que confere cada TX contra uma
  *   gravação e emite os RX gravados.
  *
@@ -37,6 +38,9 @@ internal class FakeTransport(
 	/** Pacotes escritos na characteristic de escrita, na ordem. */
 	val writes = mutableListOf<ByteArray>()
 
+	/** Tipo de cada escrita de [writes], na mesma ordem. */
+	val writeTypes = mutableListOf<WriteType>()
+
 	/** Chamadas de `connect` (endereço, autoReconnect). */
 	val connects = mutableListOf<Pair<String, Boolean>>()
 
@@ -56,8 +60,16 @@ internal class FakeTransport(
 	/** Status de cada escrita. */
 	var writeStatus: (ByteArray) -> Int = { GattStatus.SUCCESS }
 
-	/** O "relógio": recebe cada pacote escrito com sucesso, depois do `onWriteCompleted`. */
+	/** O "relógio": recebe cada pacote escrito com sucesso, depois do `onWriteCompleted` (ver [replyBeforeWriteCompleted]). */
 	var onWrite: ((ByteArray) -> Unit)? = null
+
+	/**
+	 * `true` entrega o pacote a [onWrite] antes do `onWriteCompleted`, então a resposta do relógio chega à sessão antes da
+	 * confirmação da escrita. Acontece no Android com escrita sem resposta: no log da SDK iDO, o segundo `02 01` saiu às
+	 * 22:08:22.013 (`20261029.log` linha 96), a resposta chegou às .068 (linha 120) e o callback da escrita, às .069
+	 * (linha 121).
+	 */
+	var replyBeforeWriteCompleted: Boolean = false
 
 	/** Chamado depois de confirmar as notificações (o replay usa para emitir RX que vêm antes do primeiro TX). */
 	var onNotificationsEnabled: (() -> Unit)? = null
@@ -114,7 +126,13 @@ internal class FakeTransport(
 		calls += "write"
 		val copy = value.copyOf()
 		writes += copy
+		writeTypes += type
 		val status = writeStatus(copy)
+		if (replyBeforeWriteCompleted && status == GattStatus.SUCCESS) {
+			onWrite?.invoke(copy)
+			events.onWriteCompleted(requestId, status)
+			return
+		}
 		events.onWriteCompleted(requestId, status)
 		if (status == GattStatus.SUCCESS) onWrite?.invoke(copy)
 	}
@@ -162,15 +180,34 @@ internal class FakeTransport(
 	fun disconnectCount(): Int = calls.count { it == "disconnect" }
 
 	companion object {
-		/** Serviço descoberto com as characteristics de um candidato. */
+		/** Serviço descoberto com as characteristics de um candidato (escrita, notificação e as `extraNotify`). */
 		fun serviceOf(candidate: GattCandidate): DiscoveredService =
 			DiscoveredService(
 				uuid = candidate.service,
 				characteristics = listOf(
 					DiscoveredCharacteristic(candidate.write, canRead = false, canWrite = true, canWriteWithoutResponse = true, canNotify = false),
 					DiscoveredCharacteristic(candidate.notify, canRead = false, canWrite = false, canWriteWithoutResponse = false, canNotify = true),
-				),
+				) + candidate.extraNotify.map {
+					DiscoveredCharacteristic(it, canRead = false, canWrite = false, canWriteWithoutResponse = false, canNotify = true)
+				},
 			)
+
+		/**
+		 * Transporte de um relógio iDO: descoberta com o serviço `0AF0` ([Profiles.IDO_MAIN]) e notificações em `0AF7`.
+		 * Sem [IdoWatchSimulator]: quem monta o teste liga [onWrite] (ver [scriptedIdo]) ou um replay.
+		 */
+		fun ido(): FakeTransport =
+			FakeTransport(services = listOf(serviceOf(Profiles.IDO_MAIN))).apply { notifyCharacteristic = Profiles.IDO_MAIN.notify }
+
+		/** Transporte iDO com um [IdoWatchSimulator] que responde como o Life Ultra GPS do log de produção. */
+		fun scriptedIdo(
+			schedule: (delayMs: Long, action: () -> Unit) -> Unit = { _, action -> action() },
+		): Pair<FakeTransport, IdoWatchSimulator> {
+			val transport = ido()
+			val simulator = IdoWatchSimulator(schedule = schedule) { characteristic, value -> transport.events.onNotification(characteristic, value) }
+			transport.onWrite = { simulator.onPhoneWrite(it) }
+			return transport to simulator
+		}
 
 		/** Transporte com um [SmaWatchSimulator] que responde por roteiro. */
 		fun scripted(watch: (FakeTransport) -> SmaWatchSimulator = { transport -> SmaWatchSimulator { transport.notify(it) } }): Pair<FakeTransport, SmaWatchSimulator> {

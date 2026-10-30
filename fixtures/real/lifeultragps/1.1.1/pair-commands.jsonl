@@ -1,0 +1,17 @@
+{"type":"header","device":"Life Ultra GPS","firmware":"1.1.1","platform":"android","mtu":23,"recordedAt":"2026-10-29T22:08:21.941-03:00","timeZone":"America/Sao_Paulo"}
+{"type":"packet","dir":"TX","atMs":0,"characteristic":"00000af6-0000-1000-8000-00805f9b34fb","hex":"0201"}
+{"type":"packet","dir":"RX","atMs":71,"characteristic":"00000af7-0000-1000-8000-00805f9b34fb","hex":"020166200100000E010001F36202020100010103"}
+{"type":"packet","dir":"TX","atMs":132,"characteristic":"00000af6-0000-1000-8000-00805f9b34fb","hex":"0401F1010102020100"}
+{"type":"packet","dir":"RX","atMs":187,"characteristic":"00000af7-0000-1000-8000-00805f9b34fb","hex":"0401000C0031BCC3543F1CE03E1C85037C"}
+{"type":"packet","dir":"TX","atMs":199,"characteristic":"00000af6-0000-1000-8000-00805f9b34fb","hex":"04050C00E03E1C85037CD182DFD13C60"}
+{"type":"packet","dir":"RX","atMs":2135,"characteristic":"00000af7-0000-1000-8000-00805f9b34fb","hex":"0405000000000000000000000000000000000000"}
+{"type":"packet","dir":"TX","atMs":27980,"characteristic":"00000af6-0000-1000-8000-00805f9b34fb","hex":"0301EA070A1D1608310300000000DC05"}
+{"type":"packet","dir":"RX","atMs":28026,"characteristic":"00000af7-0000-1000-8000-00805f9b34fb","hex":"0301000000000000000000000000000000000000"}
+{"type":"packet","dir":"TX","atMs":35366,"characteristic":"00000af6-0000-1000-8000-00805f9b34fb","hex":"0201"}
+{"type":"packet","dir":"RX","atMs":35435,"characteristic":"00000af7-0000-1000-8000-00805f9b34fb","hex":"020166200100000E010001F36202020100010103"}
+{"type":"packet","dir":"TX","atMs":35438,"characteristic":"00000af6-0000-1000-8000-00805f9b34fb","hex":"02EB"}
+{"type":"packet","dir":"RX","atMs":35495,"characteristic":"00000af7-0000-1000-8000-00805f9b34fb","hex":"02EB01010100000000000002"}
+{"type":"packet","dir":"TX","atMs":40383,"characteristic":"00000af6-0000-1000-8000-00805f9b34fb","hex":"02A0"}
+{"type":"packet","dir":"RX","atMs":40446,"characteristic":"00000af7-0000-1000-8000-00805f9b34fb","hex":"02A01A0000000D00000019000000000000008E"}
+{"type":"packet","dir":"TX","atMs":271039,"characteristic":"00000af6-0000-1000-8000-00805f9b34fb","hex":"0201"}
+{"type":"packet","dir":"RX","atMs":271413,"characteristic":"00000af7-0000-1000-8000-00805f9b34fb","hex":"020166200100000E010001F36202020100010103"}

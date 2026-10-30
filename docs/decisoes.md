@@ -2,7 +2,7 @@
 
 Uma entrada por decisão de comportamento que não está escrita em nenhuma SDK, ou que diverge do plano original. Cada uma tem o contexto, a decisão e como reverter. Quando um fixture real confirmar ou derrubar uma decisão, atualize a entrada com o caminho do fixture.
 
-Fontes abreviadas como em [`protocolo-sma.md`](protocolo-sma.md). "A gravação real" é `fixtures/real/fitgps/0.2.1/pair-commands-bt-reconnect-sync.jsonl` (fitGPS, firmware 0.2.1, telefone Android, 2026-10-29), citada pelo `atMs` dos pacotes; o que só aparece no log nativo do app de exemplo (descoberta de serviços, MTU, scan, eventos de Bluetooth) é citado pelo `ts` do log `logs-20261029-083254.jsonl`, que não é versionado porque traz o MAC do relógio (`docs/fixtures.md`, seção 3.1).
+Fontes abreviadas como em [`protocolo-sma.md`](protocolo-sma.md) (e, na ADR 22, como em [`protocolo-ido.md`](protocolo-ido.md)). "A gravação real" é `fixtures/real/fitgps/0.2.1/pair-commands-bt-reconnect-sync.jsonl` (fitGPS, firmware 0.2.1, telefone Android, 2026-10-29), citada pelo `atMs` dos pacotes; o que só aparece no log nativo do app de exemplo (descoberta de serviços, MTU, scan, eventos de Bluetooth) é citado pelo `ts` do log `logs-20261029-083254.jsonl`, que não é versionado porque traz o MAC do relógio (`docs/fixtures.md`, seção 3.1).
 
 ---
 
@@ -292,3 +292,20 @@ O controlador comum (o que cada método JS faz, o lado `WatchSessionListener` e 
 - Diferença visível só no log: a linha do export passou de `CoreGraph/exportLogs` para `AndroidCoreHost/exportLogs` (mesma mensagem), além das tags `CoreBridge/<método>` acima.
 
 Prova de equivalência: os 30 testes do host que ficaram; 12 novos no Repo 2 (`AndroidCoreHostTest`, `ReadableConverterTest`, `PromiseCompletionTest` e `DeletedSavedDataEquivalenceTest`, que roda o código antigo do módulo, copiado sem mudança, contra `ReadableConverter` + `CoreBridge` em 2.100 arrays aleatórios e três fusos); a tabela método a método do host antigo para o novo; e o APK de exemplo, em que as classes do `:bridge` entram e as removidas não existem mais. O `CoreBridge` não mudou de comportamento nessa troca. Como reverter: o Repo 2 recupera do histórico os sete arquivos e os testes, e o `android/build.gradle` volta a `protocol:0.1.0`.
+
+## ADR 22 — Família iDO (Life Ultra GPS) com driver próprio, autenticação por embaralhamento e passos só do dado ao vivo
+
+**Contexto.** A PoC precisava de uma segunda família com as mesmas funções básicas do fitGPS (scan, pareamento com confirmação, reconexão, bateria, firmware, hora, passos do dia, desconectar/esquecer), sem SDK de fabricante. No iDO a SDK (`IDoBLELib-VeryFit` 2.69.38) não monta bytes em Java: tudo passa pela biblioteca nativa `libVeryFitMulti.so`. O plano antigo (seção 9 de `arquitetura.md`) previa embrulhar a SDK num `HostDriver`. O log de bytes da SDK de produção com o mesmo Life Ultra GPS (`20261029.log`, `protocolo-ido.md`) e a leitura da biblioteca nativa mostraram que o protocolo legado é simples: frames `[cmd][key][payload]` de até 20 bytes, sem CRC, e um vínculo cuja "criptografia" é um embaralhamento fixo do desafio, sem chave.
+
+**Decisão.**
+- **Driver próprio** (`ido/IdoDriver`), como o SMA, sobre o mesmo `DriverLink`; `Family.IDO` e `Profiles.MORMAII_LIFE_ULTRA_GPS` (`lifeultragps`, nomes `Life Ultra GPS` e `Smart Watch 6010`). A sessão não mudou de forma; ganhou só um mecanismo geral: `GattCandidate.extraNotify` (CCCD ligados em ordem depois do `notify`, notificações entregues ao driver), porque a SDK liga `0af7` e `0af2` antes de qualquer comando; e não pede MTU quando o perfil pede até 23, porque a SDK não pede. O SMA não tem `extraNotify` e continua pedindo 247.
+- **Autenticação**: `04 05 0c <ver> E[6..11] (E[0..5] XOR E[6..11])`, conferida byte a byte contra o log (`protocolo-ido.md`, seção 4.2). Sem segredo a guardar; a reconexão deste relógio não pede autenticação (tabela de funções), então nada é guardado entre conexões.
+- **Escrita sem resposta** (ATT Write Command), uma por vez, no ritmo do `onCharacteristicWrite`, como a SDK em produção.
+- **Primeiro pareamento sempre manda o bind**, mesmo com `pairFlag` 1 (o relógio estava com 1 antes do bind do log e pediu confirmação). `bind_ret_code` 2 conta como sucesso, como na SDK. `bindTimeoutMs` 90 s (o relógio espera até 240 s).
+- **Passos só do dado ao vivo** (`02/A0`): uma amostra no início da hora local corrente com o acumulado do dia, `DAY_CUMULATIVE`. Uma amostra por hora (e não uma por leitura) limita o store a 24 amostras por dia, e a leitura mais nova da hora vence pela mescla por instante. O histórico por hora (V3) fica fora da PoC.
+- **Desvínculo sem bytes**: o unbind é montado na biblioteca nativa e não foi capturado. O driver falha sem escrever; o `forget` segue (apaga o estado local e desconecta) e o relógio mantém o vínculo dele até um bind novo.
+- **Sem `refresh` do cache GATT e sem as esperas de 1 s e 100 ms** que a SDK faz antes de descobrir os serviços e de ligar os CCCD: a sessão não chama API oculta (como no SMA) e as esperas não têm motivo documentado. Se o relógio não responder ao primeiro comando no aparelho, é a primeira coisa a acrescentar.
+
+**Custo.** Um protocolo conhecido só até onde o log mostrou: o que o log não tem (unbind, V3, outros modelos iDO, o significado do `pairFlag` antes do bind) fica sem cobertura, e a fixture `real/lifeultragps/1.1.1/pair-commands.jsonl` foi reconstruída do log da SDK, não gravada do rádio, então não prova o GATT (tipo de escrita, CCCD, MTU) no aparelho; isso fica para a validação com o relógio (`pendencias.md`, seção "Life Ultra GPS"). Um dia sem leitura do relógio fica sem passos (sem histórico).
+
+**Como reverter.** Tirar `Family.IDO`, o perfil, o pacote `ido/`, o `IdoWatchSimulator`, o `IdoReplay.kt` e os testes iDO; o `extraNotify` e o "não pedir MTU até 23" podem ficar (são inertes para o SMA). A alternativa de embrulhar a SDK continua descrita na seção 9 de `arquitetura.md`.

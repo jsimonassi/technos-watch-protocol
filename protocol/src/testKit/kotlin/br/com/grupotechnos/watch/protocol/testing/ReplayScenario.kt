@@ -225,8 +225,10 @@ private const val ACTION_BUDGET_MS: Long = 120_000
  *
  * @param store histórico com que a sessão começa; o padrão é vazio. Passar o store de outro replay continua o histórico
  * de uma gravação anterior do mesmo relógio (os totais do dia com duas gravações, `RealFixturesStepsTest`).
+ * @param profileId perfil passado a `pair`/`reconnect`; o padrão é o fitGPS.
+ * @param newMasker máscara dos TX (ver [ReplayDriver]); o padrão é a do SMA.
  * @param configure ajuste do [FakeTransport] antes da primeira ação (o teste do iOS entrega os RX pela sobrecarga com
- * `NSData`).
+ * `NSData`; o replay iDO troca a descoberta e a characteristic de notificação). Fica por último para a lambda final.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 internal fun TestScope.runReplay(
@@ -234,12 +236,14 @@ internal fun TestScope.runReplay(
 	actions: List<ReplayAction> = ReplayScenario.deduce(recording),
 	strict: Boolean = true,
 	store: InMemorySampleStore = InMemorySampleStore(),
+	profileId: String = Profiles.MORMAII_FIT_GPS.id,
+	newMasker: () -> PacketMasker = { TxMasker() },
 	configure: (FakeTransport) -> Unit = {},
 ): ReplayOutcome {
 	val transport = FakeTransport()
 	transport.mtuReply = recording.header.mtu
 	configure(transport)
-	val replay = ReplayDriver(recording, transport, strict)
+	val replay = ReplayDriver(recording, transport, strict, newMasker)
 	val listener = RecordingListener()
 	val logger = SessionTestLogger()
 	val clock = TestClock(recording.header.recordedAtEpochMillis, recording.header.timeZone)
@@ -251,7 +255,7 @@ internal fun TestScope.runReplay(
 	for (action in actions) {
 		val id = nextId++
 		ids += action to id
-		val profile = Profiles.MORMAII_FIT_GPS.id
+		val profile = profileId
 		when (action) {
 			ReplayAction.Pair -> session.pair(id, REPLAY_ADDRESS, profile)
 			ReplayAction.Reconnect -> session.reconnect(id, REPLAY_ADDRESS, profile)

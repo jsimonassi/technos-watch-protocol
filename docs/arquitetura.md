@@ -1,6 +1,6 @@
 # Arquitetura do `technos-watch-protocol`
 
-Este documento descreve como o repositório é dividido em módulos e pacotes, quem pode depender de quem, por onde passam os bytes nos dois sentidos, em que thread tudo roda, a máquina de estados da sessão, o modelo de erros, a ponte de bytes do host iOS (seção 11) o contrato JS comum do Core React Native, no módulo `:bridge` (seção 12), e o controlador comum que implementa cada método JS para os dois hosts (`CoreBridge`, seção 13). O protocolo SMA em si está em [`protocolo-sma.md`](protocolo-sma.md) e [`sma-dados.md`](sma-dados.md); as decisões e riscos, em [`decisoes.md`](decisoes.md); o formato das gravações, em [`fixtures.md`](fixtures.md).
+Este documento descreve como o repositório é dividido em módulos e pacotes, quem pode depender de quem, por onde passam os bytes nos dois sentidos, em que thread tudo roda, a máquina de estados da sessão, o modelo de erros, a ponte de bytes do host iOS (seção 11) o contrato JS comum do Core React Native, no módulo `:bridge` (seção 12), e o controlador comum que implementa cada método JS para os dois hosts (`CoreBridge`, seção 13). O protocolo SMA em si está em [`protocolo-sma.md`](protocolo-sma.md) e [`sma-dados.md`](sma-dados.md), e o iDO em [`protocolo-ido.md`](protocolo-ido.md); as decisões e riscos, em [`decisoes.md`](decisoes.md); o formato das gravações, em [`fixtures.md`](fixtures.md).
 
 ## 1. Camadas
 
@@ -8,7 +8,7 @@ Dois módulos Gradle, com a dependência num sentido só:
 
 | Módulo | Artefato | O que é | Depende de |
 |---|---|---|---|
-| `:protocol` | `br.com.grupotechnos.watch:protocol:0.1.0` | domínio, transporte, perfis, log, sessão e o protocolo SMA (o resto desta seção) | stdlib, `kotlinx-coroutines`, `kotlinx-datetime` |
+| `:protocol` | `br.com.grupotechnos.watch:protocol:0.1.0` | domínio, transporte, perfis, log, sessão e os protocolos SMA e iDO (o resto desta seção) | stdlib, `kotlinx-coroutines`, `kotlinx-datetime` |
 | `:bridge` | `br.com.grupotechnos.watch:bridge:0.1.0` | o contrato JavaScript do Core React Native (`EventMapper`, `StateMapper`, `SavedDataMapper`, `HostErrorCodes`, `PendingEvents`, `RequestRegistry`, seção 12), o controlador que implementa cada método JS sobre a `WatchSession` (`CoreBridge`, com a plataforma atrás de `CoreHost`, `CoreEventSink` e `CoreCompletion`, seção 13) e o conversor para Foundation do iOS; gera o framework iOS `TechnosWatchProtocol` | `:protocol` (`api`), `kotlinx-datetime` |
 
 O `:protocol` não conhece o `:bridge` (seria um ciclo, e o Gradle recusa). O host Android depende do artefato do `:bridge` pelo Maven local, que traz o do `:protocol` como `api` (o host usa os dois: o `CoreBridge` e, para montar a sessão, a `WatchSession` e o `Transport`); o host iOS consome um framework só, o guarda-chuva do `:bridge`, que exporta o `:protocol` inteiro.
@@ -19,7 +19,7 @@ flowchart LR
 	android["Host Android (Repo 2)<br/>TurboModule (casca), AndroidCoreHost,<br/>BLE, store, log, conversores RN"]
 	ios["Host iOS (Repo 2, futuro)<br/>shim ObjC++, Swift, CoreBluetooth"]
 	bridge[":bridge<br/>contrato JS comum + CoreBridge<br/>(framework TechnosWatchProtocol)"]
-	protocol[":protocol<br/>sessão, domínio, SMA"]
+	protocol[":protocol<br/>sessão, domínio, SMA, iDO"]
 	rnjs --> android
 	rnjs --> ios
 	android --> bridge
@@ -44,6 +44,7 @@ flowchart TB
 		engine["session/ SessionEngine, SessionDriverLink,<br/>HistoryStore, SyncEngine"]
 		driver["driver/ DeviceDriver, DriverLink, Drivers"]
 		sma["sma/ codec, commands, data, SmaDriver"]
+		ido["ido/ frame, comandos, payloads, IdoDriver"]
 		util["util/ ByteReader/Writer, Hex, TimeFormat"]
 	end
 	host --> session
@@ -51,7 +52,9 @@ flowchart TB
 	session --> engine
 	engine --> driver
 	driver --> sma
+	driver --> ido
 	sma --> util
+	ido --> util
 	engine --> util
 ```
 
@@ -59,21 +62,31 @@ flowchart TB
 |---|---|---|
 | `domain/` | Tipos puros (`DeviceInfo`, `Battery`, `StepsSample`, `StepsDay`, `SleepSession`, `ConnectionState`, `DataKind`, `WatchErrorCodes`) e a `WatchException` interna | pública (menos a exceção) |
 | `transport/` | `Transport` (o host implementa), `TransportEvents` (o host chama), tipos de descoberta GATT, `GattStatus`, `GattUuid` | pública |
-| `profile/` | `DeviceProfile`, `Quirks`, `Profiles.MORMAII_FIT_GPS`, `DeviceRegistry` | pública |
+| `profile/` | `DeviceProfile`, `Family`, `GattCandidate` (com `extraNotify`), `Quirks`, `Profiles.MORMAII_FIT_GPS`, `Profiles.MORMAII_LIFE_ULTRA_GPS`, `DeviceRegistry` | pública |
 | `log/` | `WatchLogger` (o host implementa), `FrameJsonl` (formato das gravações) | pública |
 | `session/` | `WatchSession` e `WatchSessionListener` (públicos); `SessionEngine`, `SessionDriverLink`, `GattOperations`, `SessionCommand`, `SyncEngine`, `HistoryStore`, `StepsAggregator` (internos) | fachada pública |
 | `driver/` | `DeviceDriver`, `DriverLink`, `DriverNotice`, `Drivers` (internos) e `HostDriver` (público, vazio) | interna |
 | `sma/` | Protocolo SMA completo e `SmaDriver` | interna |
+| `ido/` | Protocolo legado iDO (frame, catálogo, payloads, autenticação do vínculo) e `IdoDriver` | interna |
 | `util/` | Bytes big-endian, hexadecimal, datas | interna |
 | `ios/` (só `iosMain`) | Ponte de bytes para o host Swift: `ByteArray` ↔ `NSData` e as sobrecargas de `TransportEvents` com `NSData` (seção 11) | pública, só no iOS |
 
+**Famílias**
+
+| `Family` | Perfil (`id`) | Driver | GATT | Handshake | Protocolo |
+|---|---|---|---|---|---|
+| `SMA` | `MORMAII_FIT_GPS` (`fitgps`) | `sma/SmaDriver` | NUS (`FF60` antes, se houver); escrita com resposta; MTU 247 pedido | BIND + LOGIN; reconexão só LOGIN | [`protocolo-sma.md`](protocolo-sma.md), [`sma-dados.md`](sma-dados.md) |
+| `IDO` | `MORMAII_LIFE_ULTRA_GPS` (`lifeultragps`) | `ido/IdoDriver` | `0af0`: escrita sem resposta em `0af6`, notificações `0af7` + `0af2`; MTU não pedido | informação básica + bind + autenticação com confirmação na tela; reconexão só a informação básica | [`protocolo-ido.md`](protocolo-ido.md) |
+
+Os dois perfis somam os passos em `DAY_CUMULATIVE`; o fitGPS lê o histórico por hora, o Life Ultra GPS só o total do dia ao vivo (ADR 22).
+
 **Regras de dependência**
 
-- `session/` não importa nada de `sma/`: só `driver/Drivers.create(link)` conhece as famílias. Trocar ou acrescentar uma família não toca a sessão.
+- `session/` não importa nada de `sma/` nem de `ido/`: só `driver/Drivers.create(link)` conhece as famílias. Trocar ou acrescentar uma família não toca a sessão.
 - `transport/` não conhece família nem protocolo: só bytes, UUIDs e status.
-- `driver/` e `sma/` não conhecem `ConnectionState`, listener, fila nem store; recebem um `DriverLink` pronto.
+- `driver/`, `sma/` e `ido/` não conhecem `ConnectionState`, listener, fila nem store; recebem um `DriverLink` pronto.
 - A API pública não usa `suspend`, `Flow`, `value class` nem tipos do `kotlinx-datetime` (Swift não os consome bem): datas são epoch millis e strings ISO. Por isso `TransportEvents`, `WatchSession` e o listener são de callback. A tarefa `./gradlew :bridge:checkObjcHeader` (parte do `check`) liga o framework guarda-chuva do simulador e falha se o header `TechnosWatchProtocol.h` contiver `completionHandler`, `Kotlinx_coroutines`, `Kotlinx_datetime`, `Kotlinx_serialization`, `Flow` ou `Coroutine`, ou se a `WatchSession`, o `Transport`, a ponte de bytes ou o contrato do `:bridge` não aparecerem exatamente uma vez. A regra vale para o `:bridge` também.
-- `domain/` e `profile/` não dependem de ninguém; `transport/` também não. A única dependência de `driver/` para uma família é `Drivers` importando o `SmaDriver`.
+- `domain/` e `profile/` não dependem de ninguém; `transport/` também não. A única dependência de `driver/` para uma família é `Drivers` importando o `SmaDriver` e o `IdoDriver`.
 - Toda declaração pública tem KDoc: `./gradlew dokkaHtml` roda nos dois módulos com `reportUndocumented` e `failOnWarning`, então um símbolo público sem documentação quebra o build. Vale também para o `iosMain` (o Dokka documenta o pacote `ios` de cada módulo no source set `iosMain`).
 - O lado positivo do header: `./gradlew :bridge:checkSwiftInterop` (parte do `check`) compila com `swiftc -typecheck` um host Swift mínimo (`bridge/swift-interop/MinimalHost.swift`) contra o framework guarda-chuva; um nome, rótulo ou tipo que esse arquivo usa e que mude no header quebra o build (`decisoes.md`, ADRs 19 a 21). Ele usa toda a `WatchSession`, os protocolos que o host implementa (inclusive `CoreHost`, `CoreEventSink` e `CoreCompletion`), `TransportEvents` nas duas formas, a ponte de bytes, o domínio que o host mapeia e todo o `CoreBridge` (lista no `README.md` da pasta); o que ficar fora dele não é conferido. `./gradlew :bridge:checkObjcInterop` faz o mesmo para o shim Objective-C++ do TurboModule (`bridge/objc-interop/MinimalTurboModule.mm`, `clang++ -fsyntax-only` com ARC e `-Werror`): cada seletor do `TWPCoreBridge` que o shim chama e os protocolos que ele implementa.
 - `ios/` só depende de `transport/` e da plataforma; nada do código comum depende dele.
@@ -183,11 +196,11 @@ O diagrama omite, para legibilidade, as setas de `disconnect` e de "Bluetooth de
 **CONFIGURING.** Em ordem:
 1. `discoverServices` (espera até 15 s). Status ≠ 0 ou silêncio → `TRANSPORT`.
 2. Escolhe o primeiro `GattCandidate` do perfil cujo serviço **e** as duas characteristics (write e notify) apareceram, com UUIDs normalizados (`GattUuid.normalize`). No fitGPS: `FF60/FF61/FF62` antes do NUS (ADR 6); o firmware 0.2.1 só expõe o NUS. Nenhum → `GATT_NOT_SUPPORTED`.
-3. `enableNotifications` na notify (espera `commandTimeoutMs`). Falha → `TRANSPORT`.
-4. `requestMtu(quirks.requestMtu)` com espera de 2 s; falha ou silêncio → MTU 23 (ADR 5). Não é erro.
+3. `enableNotifications` na notify e depois em cada `extraNotify` do candidato, um de cada vez e na ordem (espera `commandTimeoutMs` por cada). Falha → `TRANSPORT`. Só o iDO tem `extraNotify` (`0af2`, depois de `0af7`, como a SDK); uma `extraNotify` que não apareceu na descoberta é pulada com WARN no passo 2. As notificações de todas essas characteristics vão para o driver.
+4. `requestMtu(quirks.requestMtu)` com espera de 2 s; falha ou silêncio → MTU 23 (ADR 5). Não é erro. Com `requestMtu` até 23 (o iDO, cuja SDK não pede MTU) o pedido não é feito e o link fica com 23 (ADR 22).
 5. Cria o `SessionDriverLink` (o canal de notificações existe desde o passo 2, então nada notificado antes do driver se perde), `Drivers.create(link)`, `driver.start(escopo da conexão)` e começa a coletar `driver.notices`.
 
-**HANDSHAKING.** `driver.handshake(FIRST_PAIR | RECONNECT)`. Cada fase (`"BIND"`, `"LOGIN"`) é anunciada como `onStateChanged(HANDSHAKING, fase)`. O BIND pode esperar `bindTimeoutMs` (60 s) pela confirmação na tela do relógio; durante esse tempo a sessão não reconecta (ADR 4).
+**HANDSHAKING.** `driver.handshake(FIRST_PAIR | RECONNECT)`. Cada fase (`"BIND"`, `"LOGIN"`) é anunciada como `onStateChanged(HANDSHAKING, fase)`. O BIND pode esperar `bindTimeoutMs` (60 s no fitGPS, 90 s no Life Ultra GPS) pela confirmação na tela do relógio; durante esse tempo a sessão não reconecta (ADR 4). No iDO, `"BIND"` cobre a informação básica, o bind e a autenticação, e `"LOGIN"` é a reconexão, só com a informação básica (`protocolo-ido.md`, seção 4).
 - `FIRST_PAIR` falhou: `DISCONNECTED` + `onError(HANDSHAKE_FAILED)` (o código original, por exemplo `TIMEOUT`, vai na mensagem). Link caiu: `onError(DISCONNECTED)`. O primeiro pareamento nunca reconecta sozinho.
 - `RECONNECT` recusado pelo relógio (LOGIN recusado com os dois formatos de payload; o driver nunca manda BIND numa reconexão): `DISCONNECTED` + `onError(HANDSHAKE_FAILED)` no `reconnect` pendente, se houver, e a sessão para de tentar sozinha (inclusive ao religar o Bluetooth). Só um `pair` refaz o vínculo (ADR 11).
 - `RECONNECT` falhou de outro jeito (sem resposta, link caiu): continua em `RECONNECTING` e tenta de novo, com espera crescente.
@@ -258,7 +271,7 @@ Internamente tudo é `WatchException(code, message)`; nada atravessa a API públ
 
 ## 9. Como um `VendorSdkDriver` entraria
 
-Famílias que dependem da SDK do fabricante (ex.: iDO) não têm codec próprio: a SDK fala com o relógio. O ponto de costura é `driver/HostDriver` (pública e vazia nesta PoC):
+O iDO, que este plano usava de exemplo, ganhou driver próprio (`ido/`, ADR 22). Famílias que ainda dependam da SDK do fabricante não têm codec próprio: a SDK fala com o relógio. O ponto de costura é `driver/HostDriver` (pública e vazia nesta PoC):
 
 1. Definir em `HostDriver` métodos de callback simples (sem `suspend`, que o Swift não implementa), espelhando `DeviceDriver`: `handshake(mode, callback)`, `readBattery(callback)`, `readSteps(callback)` etc., e um canal de avisos.
 2. Criar um `VendorSdkDriver` interno que implementa `DeviceDriver` adaptando os callbacks com `suspendCancellableCoroutine` e ignora o `DriverLink` (a SDK é dona do BLE).
@@ -269,10 +282,10 @@ O resto (fila, sync, store, regra do terminal, listener) não muda.
 
 ## 10. Testes da sessão
 
-- O kit de teste, em `protocol/src/testKit/` (pastas que o `:protocol` e o `:bridge` compilam nos próprios testes; `protocol/src/testKit/README.md`): `FakeTransport` (host síncrono e controlável), `SmaWatchSimulator` (relógio SMA em nível de byte, compartilhado com os testes do driver), `ReplayDriver` + `TxMasker` (replay de gravações), `ReplayScenario` (deduz as ações de uma gravação), `RecordingListener`, `SessionTestLogger`, `TestClock`, a `SessionHarness` (`runSession`) e a leitura das gravações nos quatro targets (`RecordingLoader`, o `expect` de arquivo `FixtureFiles`, com os `actual` em `testKitJvm/` e `testKitIos/`). O `:bridge` usa o mesmo kit para testar o `CoreBridge` sobre uma sessão de verdade (seção 13).
-- `commonTest/.../session/`: `WatchSessionLifecycleTest`, `WatchSessionCommandsTest`, `BluetoothOffContractTest` (contrato B), `TerminalCallbackInvariantTest`, `HistoryStoreTest`. Todos com `runTest` e tempo virtual; `runSession` fecha a sessão mesmo quando uma asserção falha (senão uma reconexão em ciclo não deixaria o teste terminar).
+- O kit de teste, em `protocol/src/testKit/` (pastas que o `:protocol` e o `:bridge` compilam nos próprios testes; `protocol/src/testKit/README.md`): `FakeTransport` (host síncrono e controlável; `FakeTransport.scriptedIdo` monta o do iDO; `replyBeforeWriteCompleted` entrega a resposta antes da confirmação da escrita), `SmaWatchSimulator` (relógio SMA em nível de byte, compartilhado com os testes do driver), `IdoWatchSimulator` (o Life Ultra GPS em nível de byte, com as respostas do log da SDK, a confirmação do vínculo agendada no tempo virtual, recusa, já vinculado, `pairFlag` 0, `03/01` recusado, respostas curtas e, no meio, pacotes V3 e frames com o mesmo `cmd` e outra `key`), `ReplayDriver` + `PacketMasker` (`TxMasker` do SMA, `IdoTxMasker` do iDO; replay de gravações), `ReplayScenario` e `IdoReplayScenario` (deduzem as ações de uma gravação SMA ou iDO), `RecordingListener`, `SessionTestLogger`, `TestClock`, a `SessionHarness` (`runSession`) e a leitura das gravações nos quatro targets (`RecordingLoader`, o `expect` de arquivo `FixtureFiles`, com os `actual` em `testKitJvm/` e `testKitIos/`). O `:bridge` usa o mesmo kit para testar o `CoreBridge` sobre uma sessão de verdade (seção 13).
+- `commonTest/.../session/`: `WatchSessionLifecycleTest`, `WatchSessionCommandsTest`, `BluetoothOffContractTest` (contrato B), `TerminalCallbackInvariantTest`, `HistoryStoreTest`, `IdoSessionTest` (o Life Ultra GPS pela sessão: CCCD `0af7` e `0af2`, bind com confirmação, recusa, timeout, bind sem reenvio, reconexão sem autenticação, comandos, resposta antes da confirmação da escrita, `03/01` recusado, passos do dia, esquecer). Todos com `runTest` e tempo virtual; `runSession` fecha a sessão mesmo quando uma asserção falha (senão uma reconexão em ciclo não deixaria o teste terminar).
 - `commonTest/.../testing/` tem o que é só do `:protocol`: `SyntheticFitGpsFixture` e o replay em tempo real, `RealtimeReplay` e a `HostQueue` (fila serial do host, `expect`/`actual`; os `actual` em `src/jvmSharedTest/`, compilado por `jvmTest` e `androidUnitTest`, e em `iosTest/`).
-- `commonTest/.../session/RealFixturesReplayTest` (toda gravação em `fixtures/real/` e a sintética, uma linha `REPLAY` por arquivo no stdout de cada target) e `RealtimeReplayTest` (a gravação real no dispatcher de produção, em tempo real, seção 4; linha `REALTIME-REPLAY`); `SessionThreadingTest` (o dispatcher dos construtores públicos é serial; o logger nas consultas síncronas, seção 4).
+- `commonTest/.../session/RealFixturesReplayTest` (toda gravação SMA em `fixtures/real/` e a sintética, uma linha `REPLAY` por arquivo no stdout de cada target; as de outra família saem como `skipped`) e `IdoRealFixturesReplayTest` (as gravações iDO, com `IdoReplayScenario` e `IdoTxMasker`) e `RealtimeReplayTest` (a gravação real no dispatcher de produção, em tempo real, seção 4; linha `REALTIME-REPLAY`); `SessionThreadingTest` (o dispatcher dos construtores públicos é serial; o logger nas consultas síncronas, seção 4).
 - `jvmTest/`: só o que precisa da JVM: `RecordingLoaderTest` (o `java.time` como oráculo do `recordedAt`), `SmaSessionReplayTest` (gravação sintética de ponta a ponta e a regravação com `FIXTURES_REGENERATE=1`), `Hci2JsonlTest` (roda o `python3`).
 - `iosTest/.../ios/ByteBridgeTest`: a ponte de bytes do iOS (seção 11).
 

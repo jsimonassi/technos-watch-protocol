@@ -19,7 +19,7 @@
 
 **Fica de fora.** BLE de plataforma (é do host, via `Transport`), qualquer byte de protocolo (é do driver), persistência em disco (é do host, via `SampleStore`), mapeamento para o JavaScript (é do Core RN).
 
-**Dependências.** `domain/`, `transport/`, `profile/`, `log/`, `driver/` (só `Drivers` e os contratos), `util/TimeFormat`, `kotlinx-coroutines`, `kotlinx-datetime` (interno). **Não** importa `sma/`. Quem depende: o host.
+**Dependências.** `domain/`, `transport/`, `profile/`, `log/`, `driver/` (só `Drivers` e os contratos), `util/TimeFormat`, `kotlinx-coroutines`, `kotlinx-datetime` (interno). **Não** importa `sma/` nem `ido/`. Quem depende: o host.
 
 **Invariantes**
 
@@ -32,5 +32,6 @@
 - `getStepsDays`/`getSleepSessions` devolvem todo dia não confirmado, qualquer que seja `daysBefore` (ADR 15).
 - `getStepsDays`/`getSleepSessions` nunca falam com o relógio e nunca bloqueiam.
 - Nada do escopo de uma conexão sobrevive à queda dela.
+- No CONFIGURING, os CCCD são ligados um de cada vez: `notify` e depois cada `extraNotify` do candidato, na ordem do perfil; as notificações de todos chegam ao driver. O MTU só é pedido quando `Quirks.requestMtu` passa de 23.
 
-**Testes.** `commonTest/.../session/` (`WatchSessionLifecycleTest`, `WatchSessionCommandsTest`, `BluetoothOffContractTest`, `TerminalCallbackInvariantTest`, `HistoryStoreTest`, todos com `FakeTransport` + `SmaWatchSimulator` em tempo virtual; `RealFixturesReplayTest`, com as gravações de `fixtures/`, inclusive a real do fitGPS 0.2.1, nos quatro targets; `RealFixturesStepsTest`, o total do dia das duas gravações reais contra a tela do relógio, em cada uma e com as duas no mesmo histórico, com `DAY_CUMULATIVE` e `HOURLY_SUM` (ADR 1); `RealtimeReplayTest`, a gravação real no dispatcher de produção, em tempo real, com os eventos vindos de uma fila de host; `SessionThreadingTest`, que o dispatcher dos construtores públicos é serial e que as consultas síncronas logam na thread de quem chama) e `jvmTest/.../session/SmaSessionReplayTest` (a gravação sintética de ponta a ponta).
+**Testes.** `commonTest/.../session/` (`WatchSessionLifecycleTest`, `WatchSessionCommandsTest`, `BluetoothOffContractTest`, `TerminalCallbackInvariantTest`, `HistoryStoreTest`, todos com `FakeTransport` + `SmaWatchSimulator` em tempo virtual; `IdoSessionTest`, o Life Ultra GPS com `FakeTransport.scriptedIdo` + `IdoWatchSimulator`; `IdoRealFixturesReplayTest`, as gravações iDO de `fixtures/real/`; `RealFixturesReplayTest`, com as gravações de `fixtures/`, inclusive a real do fitGPS 0.2.1, nos quatro targets; `RealFixturesStepsTest`, o total do dia das duas gravações reais contra a tela do relógio, em cada uma e com as duas no mesmo histórico, com `DAY_CUMULATIVE` e `HOURLY_SUM` (ADR 1); `RealtimeReplayTest`, a gravação real no dispatcher de produção, em tempo real, com os eventos vindos de uma fila de host; `SessionThreadingTest`, que o dispatcher dos construtores públicos é serial e que as consultas síncronas logam na thread de quem chama) e `jvmTest/.../session/SmaSessionReplayTest` (a gravação sintética de ponta a ponta).

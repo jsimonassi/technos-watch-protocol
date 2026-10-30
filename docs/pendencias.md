@@ -101,6 +101,27 @@ Ficam para depois: a virada da meia-noite (T5) e os estados de atividade (T7). A
 
 - [ ] **T5: existe registro em 00:00:00 (ou registro ao vivo logo depois da meia-noite) com o total de ontem?** Refresh steps perto de 23:55 (o fechamento de ontem), nenhuma leitura até de manhã, Sync de manhã e Export; numa segunda noite, Refresh steps às 00:01. Procurar, nos registros `mode 0` da hora 00, um valor igual ao fechamento de ontem, e anotar quando a tela zera. Se existir, com `DAY_CUMULATIVE` o dia de hoje mostra o total de ontem até a contagem de hoje passá-lo, e só outro registro da hora 00 o corrige (`decisoes.md`, ADR 1, "O que continua aberto"). Registrar na ADR 1 e em `sma-dados.md`, seções 2 e 6, e decidir a mitigação (por exemplo, pôr o registro de hh:00:00 exato na hora anterior); fixture `steps-midnight.jsonl`.
 
+## Life Ultra GPS (iDO)
+
+O driver iDO (`docs/protocolo-ido.md`, ADR 22) foi escrito a partir do log de bytes da SDK de produção e roda no replay da fixture reconstruída (`fixtures/real/lifeultragps/1.1.1/pair-commands.jsonl`) e, desde 2026-10-30, também no relógio de verdade (abaixo). Antes de testar, desfaça o pareamento no app Mormaii de produção ou force a parada dele, para os dois apps não disputarem o relógio. Grave tudo pelo app de exemplo (Export) e copie o `frames-*.jsonl` mais recente para `fixtures/real/lifeultragps/1.1.1/<cenário>.jsonl`: ele roda no `IdoRealFixturesReplayTest` (uma reconexão no meio da gravação ainda não é deduzida; ver `IdoReplayScenario`).
+
+Primeiro teste no relógio em 2026-10-30, com o driver próprio e sem SDK de fornecedor: fixture `real/lifeultragps/1.1.1/pair-info-time-steps-sync.jsonl` (`fixtures.md`, seção 5), `TX matched 12/12`. O usuário conferiu os valores na tela do relógio.
+
+- [x] **Scan**: o relógio aparece como `Life Ultra GPS`, com `profileId` `lifeultragps` (log, ts 1793329978799). Se não aparecer, anotar o nome e os serviços anunciados do log `BleScanner/onScanResult`.
+- [x] **Pareamento com confirmação**: fase `BIND`, a tela do relógio pede a confirmação, o toque em "sim" leva a `READY`. Conferir no log `Session/configure` os dois CCCD (`0af7` e depois `0af2`), "MTU not requested" e nenhuma falha de escrita sem resposta (`AndroidGattTransport/write`). Registrar em: seção 4 de `protocolo-ido.md` e esta caixa.
+  - Feito em 2026-10-30: os dois CCCD com status 0, MTU não pedido, um desafio novo (`atMs` 171) respondido pelo XOR (`atMs` 181) e a confirmação na tela 1,5 s depois (`atMs` 1672). Prova que a resposta ao desafio vale para qualquer desafio, não só para o do log de produção.
+- [ ] **Falha 133 na primeira conexão**: em 2026-10-30 o primeiro `pair` falhou na conexão GATT com status 133 antes de qualquer pacote (log, ts 1793329992384) e o segundo, 11 s depois, conectou. Candidato: uma nova tentativa rápida no 133 durante o primeiro pareamento, como a Garmin faz (relatório Garmin, motor BLE). Registrar na ADR 13 ou numa ADR nova.
+- [ ] **Recusa**: tocar em "não" dá `HANDSHAKE_FAILED`; um `pair` novo (link novo) pede a confirmação de novo.
+- [ ] **Reconexão**: Bluetooth desligado e religado, e o app fechado e aberto (Reconnect last): fase `LOGIN`, só `02/01` e o acerto de hora, sem tela de confirmação no relógio (seção 4.4).
+- [x] **Bateria**: o valor do `getBatteryStatus` igual ao da tela do relógio (no log de produção, 14 %; no teste de 2026-10-30, 18 %).
+- [x] **Firmware**: `getFirmwareInfo` dá `1.1.1` (o Core atual mostraria `1.01.01`). Conferido em 2026-10-30 (`atMs` 24980).
+- [x] **Hora**: depois do pareamento e de um `setTime`, a hora e o dia da semana na tela do relógio iguais aos do telefone. Em 2026-10-30 o acerto mandou sexta como `04` (`atMs` 2696 e 57487) e o relógio mostrou o dia certo. O dia da semana decide a convenção (segunda = 0, a da SDK); o relógio aceitou também a de domingo = 0 do Core de produção (`protocolo-ido.md`, seção 3.4).
+- [x] **Passos**: Refresh steps e Sync dão os passos e a distância da tela do relógio; andar um pouco e repetir. Em 2026-10-30: 51 passos, 54 m e 6 kcal totais (`atMs` 60891); o Sync levou 0,2 s. As calorias não batem com a tela, e não é falha: o `02/A0` traz as totais (repouso + atividade, 13 no log de produção) e a tela mostra só as de atividade (0 no mesmo momento; `protocolo-ido.md`, seção 3.3). Anotar os dois valores.
+- [ ] **Esquecer**: o `forgetDevice` não escreve nada no relógio (o relógio continua se dizendo vinculado); um `pair` depois pede a confirmação de novo.
+- [ ] **Bytes do desvínculo**: capturar o unbind do app de produção (HCI snoop, `fixtures.md`, seção 3.2, ou o log da SDK) e implementar o `IdoDriver.unbind`.
+- [ ] **Histórico V3** (passos por hora, sono): fora da PoC; decidir se entra (fluxo de várias etapas com CRC-16, `protocolo-ido.md`, seção 8).
+- [ ] **Se o relógio não responder ao primeiro comando**: acrescentar as esperas da SDK (1 s antes da descoberta, 100 ms antes dos CCCD) e conferir se o relógio exige vínculo BLE do sistema (SiFli); ADR 22.
+
 ## Itens técnicos abertos
 
 ### 1. O sync de 59 s

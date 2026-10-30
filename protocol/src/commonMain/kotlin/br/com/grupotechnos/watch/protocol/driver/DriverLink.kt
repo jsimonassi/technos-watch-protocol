@@ -33,10 +33,13 @@ internal interface DriverLink {
 	/** Relógio e fuso do telefone, para acertar a hora e converter os horários locais que o relógio grava. */
 	val clock: WatchClock
 
-	/** Logger do host; o driver registra com tags `SmaDriver/metodo`. */
+	/** Logger do host; o driver registra com tags `SmaDriver/metodo` ou `IdoDriver/metodo`. */
 	val logger: WatchLogger
 
-	/** Notificações da characteristic `gatt.notify`, uma por pacote, na ordem de chegada. Um único consumidor. */
+	/**
+	 * Notificações de `gatt.notify` e de `gatt.extraNotify` (no iDO, `0AF7` e `0AF2`, como a SDK, que entrega as duas
+	 * ao mesmo decodificador), uma por pacote, na ordem de chegada. Um único consumidor.
+	 */
 	val notifications: ReceiveChannel<ByteArray>
 
 	/** Escreve um pacote na characteristic `gatt.write` e suspende até o host confirmar a escrita. */

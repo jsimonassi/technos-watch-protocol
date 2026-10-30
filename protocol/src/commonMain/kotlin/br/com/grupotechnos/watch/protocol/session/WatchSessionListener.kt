@@ -28,7 +28,7 @@ public interface WatchSessionListener {
 	/**
 	 * O estado da conexão mudou.
 	 *
-	 * @param phase subetapa do handshake para log e UI (no SMA: `"BIND"` ou `"LOGIN"`); `null` fora do handshake.
+	 * @param phase subetapa do handshake para log e UI (no SMA e no iDO: `"BIND"` ou `"LOGIN"`); `null` fora do handshake.
 	 */
 	public fun onStateChanged(state: ConnectionState, phase: String?)
 

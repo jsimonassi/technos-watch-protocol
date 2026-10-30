@@ -8,8 +8,8 @@ import kotlinx.coroutines.flow.Flow
 /**
  * Costura entre a sessão genérica e o protocolo de uma família.
  *
- * A sessão não sabe o que é um BIND nem um CRC: só chama estes métodos. Hoje há uma implementação,
- * o `SmaDriver`, que fala o protocolo com codec próprio sobre o [DriverLink]. No futuro, um driver
+ * A sessão não sabe o que é um BIND nem um CRC: só chama estes métodos. Hoje há duas implementações com codec próprio
+ * sobre o [DriverLink]: o `SmaDriver` (fitGPS) e o `IdoDriver` (Life Ultra GPS). No futuro, um driver
  * adaptador pode falar com a SDK de um fabricante e ignorar o link (ver [br.com.grupotechnos.watch.protocol.driver.HostDriver]).
  *
  * Contrato:
@@ -34,7 +34,8 @@ internal interface DeviceDriver {
 	/**
 	 * Handshake do protocolo. Suspende até o relógio aceitar ou lança `WatchException(HANDSHAKE_FAILED | TIMEOUT)`.
 	 *
-	 * @param onPhase chamado a cada subetapa (no SMA: `"BIND"`, `"LOGIN"`), só para log e UI.
+	 * @param onPhase chamado a cada subetapa (no SMA: `"BIND"`, `"LOGIN"`; no iDO: `"BIND"` no primeiro pareamento e
+	 * `"LOGIN"` na reconexão), só para log e UI.
 	 */
 	suspend fun handshake(mode: HandshakeMode, onPhase: (String) -> Unit)
 
@@ -60,7 +61,7 @@ internal interface DeviceDriver {
 	/** Lê o histórico de sono e entrega as sessões já analisadas. Lista vazia quando não há registros. */
 	suspend fun readSleep(): List<SleepSession>
 
-	/** Desfaz o vínculo no relógio (no SMA: UNBIND). */
+	/** Desfaz o vínculo no relógio (no SMA: UNBIND; no iDO os bytes não são conhecidos e o driver falha sem escrever). */
 	suspend fun unbind()
 
 	/** Libera recursos e falha qualquer espera pendente. Idempotente. */
@@ -69,10 +70,10 @@ internal interface DeviceDriver {
 
 /** Tipo de handshake. */
 internal enum class HandshakeMode {
-	/** Primeiro pareamento: no SMA, BIND seguido de LOGIN. */
+	/** Primeiro pareamento: no SMA, BIND seguido de LOGIN; no iDO, informação básica, bind e autenticação. */
 	FIRST_PAIR,
 
-	/** Relógio já vinculado: no SMA, só LOGIN. */
+	/** Relógio já vinculado: no SMA, só LOGIN; no iDO, só a informação básica (o relógio tem de se dizer vinculado). */
 	RECONNECT,
 }
 

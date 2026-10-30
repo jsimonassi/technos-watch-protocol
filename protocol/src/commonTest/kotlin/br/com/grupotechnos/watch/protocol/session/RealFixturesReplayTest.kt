@@ -1,6 +1,8 @@
 package br.com.grupotechnos.watch.protocol.session
 
 import br.com.grupotechnos.watch.protocol.domain.ConnectionState
+import br.com.grupotechnos.watch.protocol.profile.DeviceRegistry
+import br.com.grupotechnos.watch.protocol.profile.Family
 import br.com.grupotechnos.watch.protocol.testing.Fixtures
 import br.com.grupotechnos.watch.protocol.testing.Recording
 import br.com.grupotechnos.watch.protocol.testing.RecordingLoader
@@ -33,6 +35,10 @@ import kotlin.test.fail
  * A listagem de `fixtures/real` tem código próprio em cada target (`java.io.File` na JVM, `NSFileManager` no iOS). Para
  * uma listagem quebrada não pular todas as gravações em silêncio, a gravação versionada [COMMITTED_REAL_RECORDING] tem de
  * aparecer nela, senão o teste falha.
+ *
+ * A dedução e a máscara daqui são do SMA. Uma gravação cujo `device` do cabeçalho o `DeviceRegistry` identifica como de
+ * outra família é pulada com uma linha `REPLAY <caminho>: skipped (family <família>…)`; as do iDO rodam no
+ * `IdoRealFixturesReplayTest`. Um `device` desconhecido continua sendo reproduzido como SMA.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class RealFixturesReplayTest {
@@ -44,7 +50,15 @@ class RealFixturesReplayTest {
 			COMMITTED_REAL_RECORDING in listed,
 			"listing of ${Fixtures.path("real")} misses $COMMITTED_REAL_RECORDING; found $listed",
 		)
-		val failures = files.mapNotNull { path -> check(RecordingLoader.load(path)) }
+		val failures = files.mapNotNull { path ->
+			val recording = RecordingLoader.load(path)
+			val family = DeviceRegistry.identify(recording.header.device, emptyList())?.family
+			if (family != null && family != Family.SMA) {
+				println("REPLAY ${Fixtures.relative(path)}: skipped (family $family, replayed by IdoRealFixturesReplayTest)")
+				return@mapNotNull null
+			}
+			check(recording)
+		}
 		if (failures.isNotEmpty()) fail(failures.joinToString("\n\n"))
 	}
 

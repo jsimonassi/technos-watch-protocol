@@ -11,15 +11,15 @@ O host (o Core React Native, ou um app nativo) implementa três interfaces e con
 - [br.com.grupotechnos.watch.protocol.session.WatchSession]: a fachada (parear, reconectar, comandos, sincronização);
   os resultados chegam por [br.com.grupotechnos.watch.protocol.session.WatchSessionListener].
 
-Tudo o que é protocolo de fabricante (frame, CRC, handshake, catálogo de comandos do SMA) é `internal` e não aparece
-aqui. A API não usa `suspend`, `Flow` nem tipos do `kotlinx-datetime`, para o Swift consumir o framework sem shim.
+Tudo o que é protocolo de fabricante (frame, CRC, handshake, catálogo de comandos do SMA e do iDO) é `internal` e não
+aparece aqui. A API não usa `suspend`, `Flow` nem tipos do `kotlinx-datetime`, para o Swift consumir o framework sem shim.
 O framework iOS `TechnosWatchProtocol` é gerado pelo módulo `technos-watch-bridge` (`:bridge`), que exporta este módulo
 inteiro, com os mesmos nomes; lá ficam as tarefas `checkObjcHeader` (confere o header gerado) e `checkSwiftInterop`
 (compila um host Swift mínimo contra ele). Este módulo não depende do `:bridge`. No iOS, o pacote
 `br.com.grupotechnos.watch.protocol.ios` converte os bytes entre `ByteArray` e `NSData` (`Data` no Swift).
 
 Documentação de desenho no repositório: `docs/arquitetura.md` (camadas, threading, máquina de estados, erros),
-`docs/protocolo-sma.md` (protocolo byte a byte), `docs/sma-dados.md`, `docs/fixtures.md`, `docs/decisoes.md`,
+`docs/protocolo-sma.md` (protocolo byte a byte), `docs/sma-dados.md`, `docs/protocolo-ido.md` (o iDO do Life Ultra GPS), `docs/fixtures.md`, `docs/decisoes.md`,
 `docs/pendencias.md` (validação no relógio que ficou para depois) e `docs/glossario.md`.
 
 # Package br.com.grupotechnos.watch.protocol.domain

@@ -2,9 +2,9 @@
 
 Biblioteca Kotlin Multiplatform que fala o protocolo BLE dos relógios Mormaii/Technos sem SDK de fabricante. Ela cuida do domínio (passos, sono, bateria, versão), da sessão com o relógio (conexão, handshake, fila de comandos, sincronização, reconexão) e dos codecs de cada família. O BLE da plataforma fica com o host, que implementa uma interface pequena (`Transport`) e entrega os callbacks de volta.
 
-**Estado: prova de conceito.** Família suportada: **SMA**, modelo **Mormaii fitGPS** (`Profiles.MORMAII_FIT_GPS`). O primeiro host é o `react-native-technos-core-next` (repositório irmão deste) no Android. O iOS compila, gera o XCFramework e tem a ponte de bytes para o host Swift (pacote `ios`, só no `iosMain`), mas ainda não tem host. O contrato JavaScript do Core React Native (payloads dos eventos, estados, `deletedSavedData`, fila de eventos, pedidos em andamento) e o controlador que implementa cada método JS sobre a sessão (`CoreBridge`, com a plataforma atrás de `CoreHost`) moram no módulo `:bridge`, em código comum, para os dois hosts entregarem o mesmo ao JS. A primeira gravação real (fitGPS com firmware 0.2.1 e um telefone Android, `fixtures/real/fitgps/0.2.1/`) reproduz inteira no replay, na JVM, nos testes unitários Android e no simulador iOS: pareamento, comandos, Bluetooth desligado e religado, passos e 64 páginas de sono. Ela também roda em tempo real no dispatcher de produção, com os eventos vindos de uma fila de host, nos mesmos quatro targets. O que ela provou e as hipóteses que continuam abertas estão em [`docs/protocolo-sma.md`](docs/protocolo-sma.md), seção 8; a validação no relógio que ficou para depois está em [`docs/pendencias.md`](docs/pendencias.md).
+**Estado: prova de conceito.** Famílias suportadas: **SMA**, modelo **Mormaii fitGPS** (`Profiles.MORMAII_FIT_GPS`), e **iDO**, modelo **Mormaii Life Ultra GPS** (`Profiles.MORMAII_LIFE_ULTRA_GPS`), este só com as funções básicas (pareamento com confirmação na tela, reconexão, bateria, firmware, hora e o total de passos do dia ao vivo; [`docs/protocolo-ido.md`](docs/protocolo-ido.md)). O primeiro host é o `react-native-technos-core-next` (repositório irmão deste) no Android. O iOS compila, gera o XCFramework e tem a ponte de bytes para o host Swift (pacote `ios`, só no `iosMain`), mas ainda não tem host. O contrato JavaScript do Core React Native (payloads dos eventos, estados, `deletedSavedData`, fila de eventos, pedidos em andamento) e o controlador que implementa cada método JS sobre a sessão (`CoreBridge`, com a plataforma atrás de `CoreHost`) moram no módulo `:bridge`, em código comum, para os dois hosts entregarem o mesmo ao JS. A primeira gravação real (fitGPS com firmware 0.2.1 e um telefone Android, `fixtures/real/fitgps/0.2.1/`) reproduz inteira no replay, na JVM, nos testes unitários Android e no simulador iOS: pareamento, comandos, Bluetooth desligado e religado, passos e 64 páginas de sono. Ela também roda em tempo real no dispatcher de produção, com os eventos vindos de uma fila de host, nos mesmos quatro targets. O que ela provou e as hipóteses que continuam abertas estão em [`docs/protocolo-sma.md`](docs/protocolo-sma.md), seção 8; a validação no relógio que ficou para depois está em [`docs/pendencias.md`](docs/pendencias.md).
 
-**Não é:** um módulo React Native, um wrapper de SDK de fabricante nem uma implementação de BLE. Também ficam de fora DFU/OTA, notificações, chamadas, alarmes, HR, SpO2 e as outras famílias.
+**Não é:** um módulo React Native, um wrapper de SDK de fabricante nem uma implementação de BLE. Também ficam de fora DFU/OTA, notificações, chamadas, alarmes, HR, SpO2, o histórico V3 e o desvínculo do iDO, e as outras famílias e modelos.
 
 ## Estrutura
 
@@ -13,7 +13,7 @@ protocol/                 módulo KMP do protocolo (android, jvm, iosArm64, iosS
 	src/commonMain/...    código; cada pacote tem um README.md
 	src/iosMain/.../ios/  ponte de bytes para o host Swift (ByteArray <-> NSData), só iOS
 	src/commonTest/...    testes de codec, driver e sessão, replay das fixtures (rodam em JVM, Android e iOS)
-	src/testKit*/...      kit de teste compartilhado com o :bridge (FakeTransport, relógio SMA simulado, SessionHarness, replay)
+	src/testKit*/...      kit de teste compartilhado com o :bridge (FakeTransport, relógios SMA e iDO simulados, SessionHarness, replay)
 	src/iosTest/...       testes da ponte de bytes e os actual de teste do iOS (arquivo, fila GCD)
 	src/jvmSharedTest/... actual de teste da JVM, compilados por jvmTest e androidUnitTest
 	src/jvmTest/...       o que precisa da JVM: script de conversão, regravação da fixture sintética, oráculo java.time
@@ -31,7 +31,7 @@ bridge/                   módulo KMP do contrato JS do Core React Native (mesmo
 	swift-interop/        host Swift mínimo que o checkSwiftInterop compila contra o framework guarda-chuva
 	objc-interop/         TurboModule mínimo em Objective-C++ que o checkObjcInterop compila contra o framework
 	Module.md             texto de abertura da documentação Dokka
-docs/                     arquitetura, protocolo SMA, dados, fixtures, decisões, glossário
+docs/                     arquitetura, protocolos SMA e iDO, dados, fixtures, decisões, glossário
 fixtures/                 gravações .jsonl para replay (synthetic/, real/, tools/)
 scripts/hci2jsonl.py      converte um HCI snoop exportado do Wireshark em fixture
 ```
@@ -147,7 +147,7 @@ BRIDGE_GOLDEN_REGENERATE=1 ./gradlew :bridge:jvmTest --tests '*CoreBridgeGoldenT
 ./gradlew :protocol:jvmTest --tests 'br.com.grupotechnos.watch.protocol.sma.SmaFrameGoldenTest'   # uma classe
 ```
 
-O `dokkaHtml` falha se qualquer declaração pública ficar sem KDoc, nos dois módulos, inclusive no `iosMain`. Os testes de sessão rodam em tempo virtual e não precisam de relógio; a exceção é o `RealtimeReplayTest`, que reproduz a gravação real em tempo real no dispatcher de produção (cerca de 8 s por target). Todo `.jsonl` em `fixtures/real/` vira teste de replay automaticamente nos quatro targets, e a pasta é input de todas as tarefas de teste, inclusive a do simulador, então uma gravação nova roda na execução seguinte. Cada arquivo reproduzido imprime uma linha `REPLAY` no `system-out` do XML de cada tarefa (`protocol/build/test-results/<tarefa>/TEST-…RealFixturesReplayTest.xml`; no iOS, `<tarefa>` é `iosSimulatorArm64Test`). Como gravar, o que versionar e como converter está em [`docs/fixtures.md`](docs/fixtures.md).
+O `dokkaHtml` falha se qualquer declaração pública ficar sem KDoc, nos dois módulos, inclusive no `iosMain`. Os testes de sessão rodam em tempo virtual e não precisam de relógio; a exceção é o `RealtimeReplayTest`, que reproduz a gravação real em tempo real no dispatcher de produção (cerca de 8 s por target). Todo `.jsonl` em `fixtures/real/` vira teste de replay automaticamente nos quatro targets, e a pasta é input de todas as tarefas de teste, inclusive a do simulador, então uma gravação nova roda na execução seguinte. Cada arquivo reproduzido imprime uma linha `REPLAY` no `system-out` do XML de cada tarefa (`protocol/build/test-results/<tarefa>/TEST-…RealFixturesReplayTest.xml`, e `…IdoRealFixturesReplayTest.xml` para as gravações iDO; no iOS, `<tarefa>` é `iosSimulatorArm64Test`). Como gravar, o que versionar e como converter está em [`docs/fixtures.md`](docs/fixtures.md).
 
 ## Documentação
 
@@ -156,6 +156,7 @@ O `dokkaHtml` falha se qualquer declaração pública ficar sem KDoc, nos dois m
 | [`docs/arquitetura.md`](docs/arquitetura.md) | módulos, camadas e regras de dependência, fluxos ida e volta, threading, máquina de estados, fila, erros, ponte de bytes do iOS, contrato JS comum (`:bridge`) |
 | [`docs/protocolo-sma.md`](docs/protocolo-sma.md) | protocolo SMA byte a byte: GATT, frame, CRC, ACK/NACK, remontagem, handshake, catálogo, payloads, vetores dourados, diferenças Android × iOS |
 | [`docs/sma-dados.md`](docs/sma-dados.md) | registros de passos e sono, agrupamento por hora, estimativas, analisador de sono |
+| [`docs/protocolo-ido.md`](docs/protocolo-ido.md) | protocolo iDO legado do Life Ultra GPS: GATT, frame, informação básica, firmware, dados ao vivo, hora, vínculo com a autenticação e reconexão, o que não se sabe |
 | [`docs/fixtures.md`](docs/fixtures.md) | formato `.jsonl`, como gravar (app de exemplo, HCI snoop), replay, procedência de cada fixture |
 | [`docs/decisoes.md`](docs/decisoes.md) | decisões que não estão em nenhuma SDK (ADRs curtos), com como reverter |
 | [`docs/pendencias.md`](docs/pendencias.md) | validação no relógio que ficou para depois (checklist) e itens técnicos abertos, com o que cada um fecha e onde registrar |

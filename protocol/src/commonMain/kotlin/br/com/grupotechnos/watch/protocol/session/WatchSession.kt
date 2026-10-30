@@ -75,7 +75,8 @@ public class WatchSession internal constructor(
 	}
 
 	/**
-	 * Primeiro pareamento: conexão direta, handshake completo (no SMA: BIND e LOGIN).
+	 * Primeiro pareamento: conexão direta, handshake completo (no SMA: BIND e LOGIN; no iDO: informação básica, bind e
+	 * autenticação com confirmação na tela).
 	 *
 	 * Termina com `onCompleted(requestId)` quando chega em [ConnectionState.READY], ou com `onError`
 	 * (`UNSUPPORTED_DEVICE`, `CONNECT_TIMEOUT`, `GATT_NOT_SUPPORTED`, `HANDSHAKE_FAILED`, `DISCONNECTED`, `TRANSPORT`
@@ -89,7 +90,8 @@ public class WatchSession internal constructor(
 	}
 
 	/**
-	 * Reconexão a um relógio já pareado: conexão pendente sem timeout e handshake curto (no SMA: só LOGIN).
+	 * Reconexão a um relógio já pareado: conexão pendente sem timeout e handshake curto (no SMA: só LOGIN; no iDO: só a
+	 * informação básica, que tem de dizer que o relógio está vinculado).
 	 *
 	 * Termina com `onCompleted(requestId)` quando chega em [ConnectionState.READY]; pode demorar indefinidamente
 	 * se o relógio estiver longe. O host não deve prender a UI esperando por isso. Se a sessão já estiver pronta com o
@@ -112,7 +114,8 @@ public class WatchSession internal constructor(
 	 * Comandos em andamento ou na fila terminam com `onError(CANCELLED)`. Termina com `onCompleted(requestId)`.
 	 *
 	 * @param forget `true` desfaz o vínculo no relógio (no SMA: UNBIND, se conectado, esperando até
-	 * `Quirks.commandTimeoutMs`; falha do UNBIND não impede o resto) e apaga o `SampleStore`.
+	 * `Quirks.commandTimeoutMs`; falha do UNBIND não impede o resto) e apaga o `SampleStore`. No iDO os bytes do
+	 * desvínculo não são conhecidos: nada é escrito, o relógio continua vinculado e o resto acontece igual.
 	 */
 	public fun disconnect(requestId: Int, forget: Boolean) {
 		engine.disconnect(requestId, forget)

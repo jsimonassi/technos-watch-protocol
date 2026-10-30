@@ -20,15 +20,19 @@ import br.com.grupotechnos.watch.protocol.util.Hex
  *
  * Divergências não lançam exceção (isso viraria erro de protocolo dentro da sessão e esconderia a causa): vão para
  * [mismatches], que o teste confere no fim junto com [remaining].
+ *
+ * A máscara padrão é a do SMA ([TxMasker]); uma família com outro frame passa a dela em `newMasker` (o iDO usa a
+ * `IdoTxMasker`). Duas instâncias são criadas, uma para o gravado e outra para o enviado, porque a máscara guarda estado.
  */
 internal class ReplayDriver(
 	private val recording: Recording,
 	private val transport: FakeTransport,
 	private val strict: Boolean = true,
+	newMasker: () -> PacketMasker = { TxMasker() },
 ) {
 	private var index = 0
-	private val expectedMasker = TxMasker()
-	private val actualMasker = TxMasker()
+	private val expectedMasker = newMasker()
+	private val actualMasker = newMasker()
 
 	/** Divergências encontradas, já descritas para a mensagem do teste. */
 	val mismatches = mutableListOf<String>()
@@ -93,20 +97,26 @@ internal class ReplayDriver(
 	}
 }
 
+/** Zera, num pacote TX, os campos que mudam legitimamente entre a gravação e o replay. Pode guardar estado. */
+internal fun interface PacketMasker {
+	/** Cópia de [packet] com os campos variáveis zerados. */
+	fun mask(packet: ByteArray): ByteArray
+}
+
 /**
- * Máscara dos campos que mudam entre gravação e replay num fluxo de pacotes TX.
+ * Máscara dos campos que mudam entre gravação e replay num fluxo de pacotes TX SMA.
  *
  * Mantém estado entre pacotes porque um frame pode ocupar várias escritas: o value de SET_TIME pode cair numa
  * continuação quando o fragmento é pequeno. Bytes mascarados viram `00`.
  * - ACK/NACK (8 bytes, flag `0x10`): seq.
  * - Início de frame de dados: seq; se for `02/01`, também o CRC e o value (offset 13 em diante, até o fim do frame).
  */
-internal class TxMasker {
+internal class TxMasker : PacketMasker {
 	private var remaining = 0
 	private var offset = 0
 	private var valueFrom = -1
 
-	fun mask(packet: ByteArray): ByteArray {
+	override fun mask(packet: ByteArray): ByteArray {
 		val out = packet.copyOf()
 		if (remaining > 0) {
 			for (i in out.indices) if (valueFrom >= 0 && offset + i >= valueFrom) out[i] = 0

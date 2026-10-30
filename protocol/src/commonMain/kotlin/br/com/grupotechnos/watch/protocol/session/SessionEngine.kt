@@ -237,7 +237,7 @@ internal class SessionEngine(
 
 	private fun onNotification(event: TransportEvent.Notification) {
 		val link = attempt?.link
-		if (link == null || link.isClosed || event.characteristic != link.gatt.notify) {
+		if (link == null || link.isClosed || !link.listensTo(event.characteristic)) {
 			// Só no log, nunca em `WatchLogger.frame`: a gravação tem só o que um link recebeu (`log/README.md`). Gravado, este
 			// pacote seria reemitido pelo replay depois do TX anterior, talvez dentro de um link vivo, e geraria um NACK que
 			// a gravação não tem.
@@ -248,7 +248,7 @@ internal class SessionEngine(
 			)
 			return
 		}
-		link.deliver(event.value)
+		link.deliver(event.characteristic, event.value)
 	}
 
 	// endregion
@@ -532,7 +532,11 @@ internal class SessionEngine(
 		}
 	}
 
-	/** Descoberta, escolha do candidato GATT, CCCD e MTU (`docs/arquitetura.md`, estado CONFIGURING). */
+	/**
+	 * Descoberta, escolha do candidato GATT, CCCD e MTU (`docs/arquitetura.md`, estado CONFIGURING). Os CCCD são ligados
+	 * um de cada vez: o de `notify` e depois os de `extraNotify`, na ordem do perfil (no iDO, `0AF7` e `0AF2`, a ordem da
+	 * SDK). O MTU só é pedido quando o perfil pede mais que 23.
+	 */
 	private suspend fun configure(attempt: Attempt): SessionDriverLink {
 		val profile = attempt.profile
 		val quirks = profile.quirks
@@ -550,15 +554,27 @@ internal class SessionEngine(
 				WatchErrorCodes.GATT_NOT_SUPPORTED,
 				"none of ${profile.gattCandidates.map { it.service }} found; discovered ${discovered.services.map { it.uuid }}",
 			)
-		log(LogLevel.INFO, "configure", "using service ${candidate.service} (write ${candidate.write}, notify ${candidate.notify})")
+		val extras = if (candidate.extraNotify.isEmpty()) "" else ", extra notify ${candidate.extraNotify}"
+		log(LogLevel.INFO, "configure", "using service ${candidate.service} (write ${candidate.write}, notify ${candidate.notify}$extras)")
 		val link = SessionDriverLink(profile, candidate, clock, logger, transport, operations, quirks.commandTimeoutMs * 2)
 		attempt.link = link
-		val cccd = operations.run(quirks.commandTimeoutMs) { id ->
-			hostCallOrThrow("enableNotifications") { transport.enableNotifications(candidate.service, candidate.notify, id) }
-		} as? TransportEvent.NotificationsEnabled
-			?: throw WatchException(WatchErrorCodes.TRANSPORT, "enableNotifications not answered after ${quirks.commandTimeoutMs} ms")
-		if (cccd.status != GattStatus.SUCCESS) {
-			throw WatchException(WatchErrorCodes.TRANSPORT, "enableNotifications failed, status=${cccd.status}")
+		for (characteristic in listOf(candidate.notify) + candidate.extraNotify) {
+			val cccd = operations.run(quirks.commandTimeoutMs) { id ->
+				hostCallOrThrow("enableNotifications") { transport.enableNotifications(candidate.service, characteristic, id) }
+			} as? TransportEvent.NotificationsEnabled
+				?: throw WatchException(
+					WatchErrorCodes.TRANSPORT,
+					"enableNotifications on $characteristic not answered after ${quirks.commandTimeoutMs} ms",
+				)
+			if (cccd.status != GattStatus.SUCCESS) {
+				throw WatchException(WatchErrorCodes.TRANSPORT, "enableNotifications on $characteristic failed, status=${cccd.status}")
+			}
+		}
+		if (quirks.requestMtu <= SessionDriverLink.DEFAULT_MTU) {
+			// O iDO não pede MTU (a SDK nunca chama requestMtu) e cada frame legado cabe em 20 bytes.
+			link.mtu = SessionDriverLink.DEFAULT_MTU
+			log(LogLevel.INFO, "configure", "MTU not requested (profile asks for ${quirks.requestMtu}); using ${link.mtu}")
+			return link
 		}
 		// Um MTU que não foi negociado não impede o protocolo: o SMA funciona com 20 bytes por escrita (o iOS usa
 		// 20 por pedaço, SmaBLE.m:663-668). Por isso falha ou silêncio aqui só reduz o fragmento.
@@ -582,20 +598,25 @@ internal class SessionEngine(
 
 	/**
 	 * O primeiro candidato do perfil cujo serviço e as duas characteristics aparecem na descoberta. A ordem do perfil
-	 * é a prioridade (no fitGPS, `FF60` antes do NUS, como `SmaManager.selectUUID`, `SmaManager.java:1577-1591`).
+	 * é a prioridade (no fitGPS, `FF60` antes do NUS, como `SmaManager.selectUUID`, `SmaManager.java:1577-1591`). Das
+	 * `extraNotify`, ficam só as que existem no serviço; a que falta vai para o log e é pulada, porque nenhum driver
+	 * depende dela para o básico (no iDO, `0AF2` é o canal de saúde, que a PoC não usa).
 	 */
 	private fun chooseCandidate(profile: DeviceProfile, services: List<DiscoveredService>): GattCandidate? {
 		val byUuid = services.associateBy { GattUuid.normalize(it.uuid) }
 		for (candidate in profile.gattCandidates) {
-			val normalized = GattCandidate(
-				service = GattUuid.normalize(candidate.service),
-				write = GattUuid.normalize(candidate.write),
-				notify = GattUuid.normalize(candidate.notify),
-			)
-			val service = byUuid[normalized.service] ?: continue
+			val serviceUuid = GattUuid.normalize(candidate.service)
+			val write = GattUuid.normalize(candidate.write)
+			val notify = GattUuid.normalize(candidate.notify)
+			val service = byUuid[serviceUuid] ?: continue
 			val characteristics = service.characteristics.map { GattUuid.normalize(it.uuid) }.toSet()
-			if (normalized.write in characteristics && normalized.notify in characteristics) return normalized
-			log(LogLevel.INFO, "configure", "service ${normalized.service} lacks write/notify characteristics; trying the next candidate")
+			if (write !in characteristics || notify !in characteristics) {
+				log(LogLevel.INFO, "configure", "service $serviceUuid lacks write/notify characteristics; trying the next candidate")
+				continue
+			}
+			val (present, missing) = candidate.extraNotify.map(GattUuid::normalize).partition { it in characteristics }
+			if (missing.isNotEmpty()) log(LogLevel.WARN, "configure", "service $serviceUuid lacks extra notify $missing; skipping them")
+			return GattCandidate(serviceUuid, write, notify, present)
 		}
 		return null
 	}

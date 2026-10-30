@@ -6,6 +6,12 @@ package br.com.grupotechnos.watch.protocol.profile
 public enum class Family {
 	/** Relógios com firmware SMA (bestmafen). Na Mormaii: fitGPS. */
 	SMA,
+
+	/**
+	 * Relógios iDO (VeryFit). Na Mormaii: Life Ultra GPS (plataforma SiFli). Protocolo legado de frames de até 20 bytes
+	 * sem CRC (`docs/protocolo-ido.md`).
+	 */
+	IDO,
 }
 
 /**
@@ -17,11 +23,16 @@ public enum class Family {
  * @property service serviço GATT.
  * @property write characteristic onde a sessão escreve os frames.
  * @property notify characteristic de onde vêm as notificações do relógio.
+ * @property extraNotify outras characteristics de notificação do mesmo serviço, ligadas em ordem depois de [notify] e
+ * antes do handshake; as notificações delas também chegam ao driver. Vazio no SMA. No iDO é a de saúde (`0af2`), que
+ * a SDK liga logo depois da normal (`docs/protocolo-ido.md`, seção 1). Uma que não apareça na descoberta é pulada,
+ * com aviso no log.
  */
 public data class GattCandidate(
 	val service: String,
 	val write: String,
 	val notify: String,
+	val extraNotify: List<String> = emptyList(),
 )
 
 /**
@@ -57,13 +68,18 @@ public enum class StepsAggregation {
 /**
  * Ajustes de comportamento por modelo. São dados, não código: o mesmo driver serve modelos com quirks diferentes.
  *
- * @property requestMtu MTU ATT pedido depois de habilitar notificações.
- * @property maxFragment tamanho máximo de cada escrita; `null` usa `MTU - 3`. Nunca abaixo de 20.
+ * [fragmentGapTimeoutMs], [bindPayload] e [bindUserId] são só do SMA; o driver iDO os ignora.
+ *
+ * @property requestMtu MTU ATT pedido depois de habilitar notificações. Até 23 (o MTU padrão), a sessão não pede MTU e
+ * usa 23: é o caso do iDO, cuja SDK nunca pede (`docs/protocolo-ido.md`, seção 1).
+ * @property maxFragment tamanho máximo de cada escrita; `null` usa `MTU - 3`. Nunca abaixo de 20. O iDO não fragmenta:
+ * todo frame legado cabe em 20 bytes.
  * @property connectTimeoutMs tempo máximo para abrir o link no primeiro pareamento (a reconexão não tem timeout).
  * @property commandTimeoutMs tempo máximo de espera por ACK e por resposta de cada comando. A sessão usa o mesmo
  * valor para esperar a habilitação das notificações e o UNBIND do `disconnect(forget = true)`.
  * @property fragmentGapTimeoutMs tempo máximo entre duas notificações do mesmo frame.
- * @property bindTimeoutMs tempo máximo de espera pela resposta do BIND (pode exigir confirmação na tela do relógio).
+ * @property bindTimeoutMs tempo máximo de espera pela resposta do BIND (pode exigir confirmação na tela do relógio). No
+ * iDO vale para a resposta do bind (`04/01`) e para a da autenticação (`04/05`), que só chega depois do toque na tela.
  * @property postLoginDelayMs espera depois do LOGIN antes dos comandos automáticos (acerto de hora).
  * @property bindPayload formato do payload do BIND/LOGIN.
  * @property bindUserId userId usado quando [bindPayload] é [BindPayloadKind.USER_ID].
@@ -89,7 +105,7 @@ public data class Quirks(
 /**
  * Tudo o que o sistema sabe sobre um modelo de relógio.
  *
- * @property id identificador estável usado pelo host e pelo JavaScript (ex.: `"fitgps"`).
+ * @property id identificador estável usado pelo host e pelo JavaScript (ex.: `"fitgps"`, `"lifeultragps"`).
  * @property bleNames nomes de advertising que identificam o modelo, comparados de forma exata.
  * @property appName nome que o app Mormaii espera em `onScannedDevice` (ex.: `"fitGPS"`).
  * @property slug identificador do modelo no backend (`SMART_WATCH_SLUG` no app).

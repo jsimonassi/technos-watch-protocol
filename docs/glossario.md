@@ -1,6 +1,6 @@
 # Glossário
 
-Termos usados no código, nos KDocs e nos outros documentos. Quando o termo tem um tipo ou uma constante no código, o nome aparece entre crases. Detalhes de protocolo ficam em [`protocolo-sma.md`](protocolo-sma.md); de sessão, em [`arquitetura.md`](arquitetura.md).
+Termos usados no código, nos KDocs e nos outros documentos. Quando o termo tem um tipo ou uma constante no código, o nome aparece entre crases. Detalhes de protocolo ficam em [`protocolo-sma.md`](protocolo-sma.md) e [`protocolo-ido.md`](protocolo-ido.md); de sessão, em [`arquitetura.md`](arquitetura.md).
 
 ## BLE e GATT
 
@@ -15,11 +15,11 @@ Termos usados no código, nos KDocs e nos outros documentos. Quando o termo tem 
 | **Notify / notificação** | Mensagem que o relógio manda sem pedido, numa characteristic com notificações ligadas. Não tem confirmação na camada ATT. Cada notificação chega à sessão por `TransportEvents.onNotification`. |
 | **Indication** | Como a notificação, mas confirmada pelo telefone na camada ATT. O SMA não usa; o `hci2jsonl.py` aceita as duas. |
 | **Write request** | Escrita ATT com confirmação do relógio (`WriteType.WITH_RESPONSE`). É o que o driver SMA usa em todo frame. |
-| **Write command** | Escrita ATT sem confirmação (`WriteType.WITHOUT_RESPONSE`). |
+| **Write command** | Escrita ATT sem confirmação (`WriteType.WITHOUT_RESPONSE`). É o que o driver iDO usa em todo frame, como a SDK iDO; no Android o `onCharacteristicWrite` vem mesmo assim e dá o ritmo. |
 | **NUS** | Nordic UART Service, `6e400001-…` (write `6e400002`, notify `6e400003`). É o serviço que o Core iOS usa com o fitGPS e o único serviço de dados que o fitGPS 0.2.1 expõe. O relógio não o anuncia no advertising. |
 | **FF60 ("ROUND")** | Serviço próprio da SMA (write `FF61`, notify `FF62`). A SDK Android prefere este quando existe; o fitGPS 0.2.1 não o expõe (hipótese H6 refutada para esse firmware, `protocolo-sma.md`, seção 1). |
 | **Advertising / anúncio** | O pacote que o relógio transmite para ser achado no scan, com o nome e uma lista de serviços. O fitGPS 0.2.1 anuncia `Mormaii_fitGPS` e os serviços `180f`, `180a` e `00000001-…`, sem o NUS; por isso a identificação é só pelo nome (`DeviceRegistry.identify`). |
-| **GattCandidate** | Um trio serviço + write + notify que o driver sabe usar. O perfil lista os candidatos em ordem de prioridade e a sessão usa o primeiro que a descoberta encontrar inteiro. |
+| **GattCandidate** | Um trio serviço + write + notify (mais as `extraNotify`, se houver) que o driver sabe usar. O perfil lista os candidatos em ordem de prioridade e a sessão usa o primeiro que a descoberta encontrar inteiro. |
 | **autoConnect** | Modo de conexão do Android em que o sistema mantém uma conexão pendente até o relógio aparecer. É o `Transport.connect(autoReconnect = true)` da reconexão. |
 | **HCI snoop** | Log de todo o tráfego Bluetooth do Android (`btsnoop_hci.log`), ligado nas Opções do desenvolvedor. Aberto no Wireshark e convertido com `scripts/hci2jsonl.py` (`docs/fixtures.md`, seção 3.2). |
 
@@ -52,6 +52,19 @@ Termos usados no código, nos KDocs e nos outros documentos. Quando o termo tem 
 | **Registro ao vivo** | O último registro de cada resposta `05/42` do fitGPS 0.2.1, carimbado no segundo do pedido, com o acumulado do dia até ali (`sma-dados.md`, seção 6). É o que faz toda leitura de passos trazer pelo menos um registro. |
 | **Vetor dourado** | Frame de referência em hex, conferido de forma independente, que o codec tem que gerar byte a byte (`SmaFrameGoldenTest`, `protocolo-sma.md`, seção 9). |
 | **H1–H9** | Hipóteses sobre o relógio, com o default adotado, a situação depois das gravações reais do fitGPS 0.2.1 (H5 provada, H3 e H6 refutadas, H4 com o formato provado, H1 parcial, as outras abertas ou só sugeridas) e como fechar o que falta (`protocolo-sma.md`, seção 8; `pendencias.md`). |
+
+## Protocolo iDO
+
+| Termo | Significado |
+|---|---|
+| **iDO** | Fabricante do firmware do Mormaii Life Ultra GPS (SDK `IDoBLELib-VeryFit`, protocolo numa biblioteca nativa). Aqui é a `Family.IDO`, com driver próprio (`ido/`) e sem a SDK (`protocolo-ido.md`). |
+| **Frame legado (V2)** | `[cmd][key][payload]`, até 20 bytes, sem tamanho, seq nem CRC; a resposta repete `cmd/key`. Uma escrita GATT por frame; na recepção, um pacote curto é completado com zeros (`IdoFrameCodec`). |
+| **V3** | O protocolo de JSON longo da SDK iDO (pacotes que começam com `0x33`, mensagem `DA AD DA AD …` com CRC-16), usado para histórico e configurações. Fora da PoC: o driver descarta esses pacotes. |
+| **Informação básica (`02/01`)** | Resposta com id do modelo, bateria (`energe`), estado de carga, `pairFlag`, plataforma e `gps_platform` (`IdoBasicInfo`). |
+| **`pairFlag`** | Byte 8 da informação básica: 1 quando o relógio se diz vinculado. A reconexão exige 1; o primeiro pareamento manda o bind de qualquer jeito. |
+| **Bind / autenticação (`04/01`, `04/05`)** | O vínculo iDO: o relógio responde o bind com um desafio de 12 bytes, o telefone responde com o embaralhamento `E[6..11] + (E[0..5] XOR E[6..11])` (`IdoAuth`), e o relógio só confirma (`auth_code` 0) depois do toque na tela. |
+| **Dados ao vivo (`02/A0`)** | Os acumuladores do dia no relógio: passos, calorias totais (repouso + atividade; a tela mostra só as de atividade), distância e tempo ativo (`IdoLiveData`). É a única fonte de passos do iDO na PoC. |
+| **`extraNotify`** | Characteristics de notificação além da `notify` de um `GattCandidate`, ligadas em ordem antes do handshake (no iDO, `0af2` depois de `0af7`). |
 
 ## Sessão e dados
 

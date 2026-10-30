@@ -68,9 +68,15 @@ internal class SessionDriverLink(
 	val isClosed: Boolean
 		get() = closed
 
-	/** Entrega uma notificação da characteristic `gatt.notify`. Chamado pelo roteador de eventos da sessão. */
-	fun deliver(value: ByteArray) {
-		logger.frame(FrameDirection.RX, gatt.notify, value, describe(value))
+	/** `true` se [characteristic] é a `gatt.notify` ou uma das `gatt.extraNotify` deste link. */
+	fun listensTo(characteristic: String): Boolean = characteristic == gatt.notify || characteristic in gatt.extraNotify
+
+	/**
+	 * Entrega uma notificação de [characteristic] (`gatt.notify` ou uma `gatt.extraNotify`, conferido antes com
+	 * [listensTo]). Chamado pelo roteador de eventos da sessão; o pacote vai para o log com a characteristic de origem.
+	 */
+	fun deliver(characteristic: String, value: ByteArray) {
+		logger.frame(FrameDirection.RX, characteristic, value, describe(value))
 		if (closed) return
 		incoming.trySend(value)
 	}

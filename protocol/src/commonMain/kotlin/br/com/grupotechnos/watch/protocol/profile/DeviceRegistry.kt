@@ -11,7 +11,8 @@ public object DeviceRegistry {
 	 * decidir: o fitGPS (firmware 0.2.1) anuncia `180f`, `180a` e `00000001-0000-1000-8000-00805f9b34fb`, mas não o
 	 * NUS que ele usa (log do app de exemplo de 2026-10-29, scan em ts 1793272444786; a gravação correspondente é
 	 * `fixtures/real/fitgps/0.2.1/pair-commands-bt-reconnect-sync.jsonl`). Um filtro de scan por serviço NUS não o
-	 * encontraria; só o filtro pelo nome encontra.
+	 * encontraria; só o filtro pelo nome encontra. O Life Ultra GPS (iDO) também é identificado pelo nome
+	 * (`Life Ultra GPS`, ou `Smart Watch 6010` do catálogo antigo); o host ainda pode filtrar o scan pelo serviço `0AF0`.
 	 *
 	 * @param bleName nome do advertising (pode ser `null` em alguns resultados de scan).
 	 * @param advertisedServices UUIDs anunciados, só para log.

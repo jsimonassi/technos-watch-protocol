@@ -228,7 +228,8 @@ public class CoreBridge internal constructor(
 	 * pede `WatchSession.pair`. Resolve com `null` quando a sessão chega em `READY`; uma falha sai como `onError`
 	 * (`method` `"pairDevice"`) e rejeita com o código da sessão.
 	 *
-	 * @param name `appName` (`"fitGPS"`, o que o app Mormaii manda), nome BLE (`"Mormaii_fitGPS"`) ou `id` do perfil.
+	 * @param name `appName` (`"fitGPS"`, `"Life Ultra GPS"`: o que o app Mormaii manda), nome BLE (`"Mormaii_fitGPS"`,
+	 * `"Smart Watch 6010"`) ou `id` do perfil.
 	 */
 	public fun pairDevice(deviceId: String, name: String, completion: CoreCompletion) {
 		val profile = checkConnectTarget(METHOD_PAIR, deviceId, name, completion) ?: return
@@ -477,7 +478,8 @@ public class CoreBridge internal constructor(
 
 	/**
 	 * Perfil a partir do nome que o JS passa em `pairDevice(deviceId, name)`: aceita o `appName` (`"fitGPS"`, o que o
-	 * app Mormaii manda hoje, `AvailableDevices.java:21-23` do Core atual), o nome BLE (`"Mormaii_fitGPS"`) e o `id`.
+	 * app Mormaii manda hoje, `AvailableDevices.java:21-23` do Core atual; `"Life Ultra GPS"` no iDO), o nome BLE
+	 * (`"Mormaii_fitGPS"`, `"Life Ultra GPS"`, `"Smart Watch 6010"`) e o `id`.
 	 */
 	internal fun resolveProfile(name: String): DeviceProfile? =
 		Profiles.all.firstOrNull { profile -> name == profile.appName || name == profile.id || name in profile.bleNames }

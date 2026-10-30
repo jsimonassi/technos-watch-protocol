@@ -10,12 +10,12 @@
 | `DriverLink` | interna | o que a sessão entrega ao driver: link GATT pronto (write/read, notificações, MTU, relógio, logger) |
 | `DriverNotice` | interna | avisos espontâneos (`DataChanged`, `LinkReported`) |
 | `HandshakeMode`, `DriverDeviceInfo` | interna | modo do handshake e versão lida |
-| `Drivers` | interna | `create(link)`: `Family.SMA` → `SmaDriver` |
+| `Drivers` | interna | `create(link)`: `Family.SMA` → `SmaDriver`, `Family.IDO` → `IdoDriver` |
 | `HostDriver` | pública, vazia | lugar reservado para adaptadores de SDK de fabricante (`docs/arquitetura.md`, seção 9) |
 
-**Fica de fora.** Estado de conexão, fila, listener, store e agregação (sessão); bytes de cada família (`sma/`); BLE (host).
+**Fica de fora.** Estado de conexão, fila, listener, store e agregação (sessão); bytes de cada família (`sma/`, `ido/`); BLE (host).
 
-**Dependências.** `domain/`, `profile/`, `transport/` (`WriteType`), `log/`, `session/WatchClock`, `kotlinx-coroutines`, e `sma/` só em `Drivers` (para criar o `SmaDriver`: é o único lugar que conhece as famílias). Quem depende: `session/` (contratos e `Drivers`) e as famílias (`sma/`, que implementa `DeviceDriver`).
+**Dependências.** `domain/`, `profile/`, `transport/` (`WriteType`), `log/`, `session/WatchClock`, `kotlinx-coroutines`, e `sma/` e `ido/` só em `Drivers` (para criar o `SmaDriver` e o `IdoDriver`: é o único lugar que conhece as famílias). Quem depende: `session/` (contratos e `Drivers`) e as famílias (`sma/` e `ido/`, que implementam `DeviceDriver`).
 
 **Invariantes do contrato**
 
@@ -24,4 +24,4 @@
 - Erros saem como `WatchException` com código de `WatchErrorCodes`; outra exceção vira `PROTOCOL`.
 - `DriverLink.write/read` são serializados pela sessão, todo pacote é logado, falha GATT vira `TRANSPORT` e queda vira `DISCONNECTED` (implementação em `session/SessionDriverLink`).
 
-**Testes.** Pelo `SmaDriverTest` (com `FakeDriverLink`) e pelos testes de sessão, que usam `Drivers.create` de verdade.
+**Testes.** Pelo `SmaDriverTest` (com `FakeDriverLink`) e pelos testes de sessão, que usam `Drivers.create` de verdade (o iDO, pelo `IdoSessionTest`).
