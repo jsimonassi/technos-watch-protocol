@@ -1,8 +1,6 @@
 import org.jetbrains.dokka.gradle.engine.parameters.VisibilityModifier
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-import org.jetbrains.kotlin.gradle.plugin.mpp.NativeBuildType
-import org.jetbrains.kotlin.gradle.plugin.mpp.apple.XCFramework
-import org.jetbrains.kotlin.konan.target.HostManager
+import org.jetbrains.kotlin.gradle.targets.native.tasks.KotlinNativeTest
 
 plugins {
 	alias(libs.plugins.kotlin.multiplatform)
@@ -29,14 +27,10 @@ kotlin {
 	// Só para rodar testes e ferramentas na JVM sem emulador.
 	jvm()
 
-	val xcFramework = XCFramework("TechnosWatchProtocol")
-	listOf(iosArm64(), iosSimulatorArm64()).forEach { target ->
-		target.binaries.framework {
-			baseName = "TechnosWatchProtocol"
-			isStatic = true
-			xcFramework.add(this)
-		}
-	}
+	// Só klibs e testes no simulador. O framework e o XCFramework que o host iOS consome saem do módulo :bridge, que
+	// exporta este módulo inteiro no mesmo framework guarda-chuva (docs/decisoes.md, ADR 20).
+	iosArm64()
+	iosSimulatorArm64()
 
 	sourceSets {
 		commonMain.dependencies {
@@ -46,9 +40,27 @@ kotlin {
 		commonTest.dependencies {
 			implementation(kotlin("test"))
 			implementation(libs.kotlinx.coroutines.test)
-		}
-		jvmTest.dependencies {
+			// Leitor das gravações .jsonl (testing/RecordingLoader), que roda nos quatro targets de teste.
 			implementation(libs.kotlinx.serialization.json)
+		}
+		// Kit de teste compartilhado com o :bridge (transporte falso, relógio SMA simulado, replay de gravações, a
+		// SessionHarness): pastas que os dois módulos compilam nos próprios testes, sem publicar código de teste. O
+		// :bridge enxerga o `internal` daqui só nos testes dele (bridge/build.gradle.kts). Ver src/testKit/README.md.
+		commonTest {
+			kotlin.srcDir("src/testKit/kotlin")
+		}
+		// Arquivos e fila do host dos testes na JVM. O teste unitário Android também roda na JVM, então os dois compilam
+		// a mesma pasta. Um source set intermediário com dependsOn desligaria o template padrão de hierarquia (e o iosMain).
+		jvmTest {
+			kotlin.srcDir("src/jvmSharedTest/kotlin")
+			kotlin.srcDir("src/testKitJvm/kotlin")
+		}
+		named("androidUnitTest") {
+			kotlin.srcDir("src/jvmSharedTest/kotlin")
+			kotlin.srcDir("src/testKitJvm/kotlin")
+		}
+		iosTest {
+			kotlin.srcDir("src/testKitIos/kotlin")
 		}
 	}
 }
@@ -66,14 +78,25 @@ android {
 	}
 }
 
-// Os testes JVM leem as fixtures da pasta fixtures/ na raiz do repositório. A pasta é input de toda tarefa de teste:
-// sem isso, copiar ou trocar uma gravação em fixtures/real deixava o teste UP-TO-DATE ou FROM-CACHE (o cache está
-// ligado em gradle.properties), e o replay da gravação nova nunca rodava. O caminho relativo entra na chave, então
-// renomear uma fixture também roda os testes de novo.
+// Os testes leem as fixtures da pasta fixtures/ na raiz do repositório, nos quatro targets. A pasta é input de toda
+// tarefa de teste: sem isso, copiar ou trocar uma gravação em fixtures/real deixava o teste UP-TO-DATE ou FROM-CACHE
+// (o cache está ligado em gradle.properties), e o replay da gravação nova nunca rodava. O caminho relativo entra na
+// chave, então renomear uma fixture também roda os testes de novo.
+val fixturesDir: Directory = rootProject.layout.projectDirectory.dir("fixtures")
+
+// JVM e testes unitários Android (debug e release): tarefas `Test`, caminho em -Dfixtures.dir.
 tasks.withType<Test>().configureEach {
-	val fixtures = rootProject.layout.projectDirectory.dir("fixtures")
-	inputs.dir(fixtures).withPropertyName("fixtures").withPathSensitivity(PathSensitivity.RELATIVE)
-	systemProperty("fixtures.dir", fixtures.asFile.absolutePath)
+	inputs.dir(fixturesDir).withPropertyName("fixtures").withPathSensitivity(PathSensitivity.RELATIVE)
+	systemProperty("fixtures.dir", fixturesDir.asFile.absolutePath)
+}
+
+// Kotlin/Native (iosSimulatorArm64Test): não é uma tarefa `Test`, então precisa da mesma ligação à parte. O processo de
+// teste roda no simulador via `xcrun simctl spawn`, que só repassa as variáveis com o prefixo SIMCTL_CHILD_ (e tira o
+// prefixo): o teste lê FIXTURES_DIR. A variável sem prefixo cobre um teste nativo que rode direto no macOS.
+tasks.withType<KotlinNativeTest>().configureEach {
+	inputs.dir(fixturesDir).withPropertyName("fixtures").withPathSensitivity(PathSensitivity.RELATIVE)
+	environment("SIMCTL_CHILD_FIXTURES_DIR", fixturesDir.asFile.absolutePath)
+	environment("FIXTURES_DIR", fixturesDir.asFile.absolutePath)
 }
 
 // Documentação da API pública (critério D2 do plano). Só o que é `public` entra; `internal` fica de fora
@@ -98,74 +121,4 @@ tasks.register("dokkaHtml") {
 	group = "documentation"
 	description = "Gera a documentação HTML da API pública em build/dokka/html (atalho para dokkaGeneratePublicationHtml)."
 	dependsOn("dokkaGeneratePublicationHtml")
-}
-
-/**
- * Falha se o header Objective-C do framework expõe tipos que o Swift não consome bem.
- *
- * A API pública precisa ser usável pelo host iOS sem shim: `suspend` vira `completionHandler`,
- * `Flow` e tipos do kotlinx viram classes opacas com prefixo `Kotlinx_`. Ver `docs/arquitetura.md`.
- */
-abstract class CheckObjcHeaderTask : DefaultTask() {
-	@get:InputFile
-	@get:PathSensitive(PathSensitivity.NONE)
-	abstract val header: RegularFileProperty
-
-	@get:Input
-	abstract val forbiddenPatterns: ListProperty<String>
-
-	@get:OutputFile
-	abstract val report: RegularFileProperty
-
-	@TaskAction
-	fun check() {
-		val headerFile = header.get().asFile
-		val lines = headerFile.readLines()
-		val hits = mutableListOf<String>()
-		for (pattern in forbiddenPatterns.get()) {
-			lines.forEachIndexed { index, line ->
-				if (line.contains(pattern)) hits += "${headerFile.name}:${index + 1}: [$pattern] ${line.trim()}"
-			}
-		}
-		val reportFile = report.get().asFile
-		reportFile.parentFile.mkdirs()
-		if (hits.isNotEmpty()) {
-			reportFile.writeText(hits.joinToString("\n", postfix = "\n"))
-			throw GradleException(
-				"The ObjC header exposes ${hits.size} forbidden symbol(s); see ${reportFile.absolutePath}\n" +
-					hits.take(20).joinToString("\n"),
-			)
-		}
-		reportFile.writeText("OK: ${lines.size} lines, none of ${forbiddenPatterns.get()}\n")
-		logger.lifecycle("ObjC header OK (${lines.size} lines): ${headerFile.absolutePath}")
-	}
-}
-
-val checkObjcHeader = tasks.register<CheckObjcHeaderTask>("checkObjcHeader") {
-	group = "verification"
-	description = "Liga o framework iosSimulatorArm64 de debug e verifica que o header ObjC não expõe coroutines, kotlinx-datetime nem suspend."
-	val framework = kotlin.iosSimulatorArm64().binaries.getFramework(NativeBuildType.DEBUG)
-	dependsOn(framework.linkTaskProvider)
-	header.set(layout.file(provider { framework.outputFile.resolve("Headers/TechnosWatchProtocol.h") }))
-	forbiddenPatterns.set(
-		listOf(
-			// Função `suspend` pública: o Kotlin/Native gera um bridge com callback.
-			"completionHandler",
-			// Tipos de kotlinx-coroutines e kotlinx-datetime em assinatura pública. O kotlinx-datetime arrasta junto os
-			// serializadores do kotlinx-serialization, que também não podem aparecer.
-			"Kotlinx_coroutines",
-			"Kotlinx_datetime",
-			"Kotlinx_serialization",
-			// `Flow` ou `StateFlow` em assinatura pública, mesmo que viessem por outro caminho.
-			"Flow",
-			// `CoroutineContext`/`CoroutineScope` vêm da stdlib e não têm o prefixo `Kotlinx_`.
-			"Coroutine",
-		),
-	)
-	report.set(layout.buildDirectory.file("reports/objcHeader/forbidden-symbols.txt"))
-	onlyIf("o link de frameworks iOS só roda em macOS") { HostManager.hostIsMac }
-}
-
-tasks.named("check") {
-	dependsOn(checkObjcHeader)
 }

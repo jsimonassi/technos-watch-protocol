@@ -7,7 +7,12 @@ import java.time.format.DateTimeFormatter
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-/** Leitura do cabeçalho das gravações (`docs/fixtures.md`, seção 1). */
+/**
+ * Leitura do cabeçalho das gravações (`docs/fixtures.md`, seção 1).
+ *
+ * O [RecordingLoader] roda nos quatro targets, mas este teste fica na JVM: o instante esperado vem do `java.time`, um
+ * oráculo independente do `kotlinx-datetime` que o leitor usa, e o padrão é o mesmo `DateTimeFormatter` do host Android.
+ */
 class RecordingLoaderTest {
 	private fun header(recordedAt: String): String =
 		"""{"type":"header","device":"Mormaii_fitGPS","firmware":"0.2.1","platform":"android","mtu":23,""" +

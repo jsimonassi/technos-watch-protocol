@@ -9,23 +9,25 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
-import java.io.File
 
 /**
  * Lê gravações `.jsonl` no formato de `log/FrameJsonl` (`docs/fixtures.md`): a primeira linha não vazia é o
  * cabeçalho (`"type":"header"`), as demais são pacotes (`"type":"packet"`). Linhas com outro `type` são ignoradas,
  * para o formato poder ganhar linhas novas sem quebrar gravações antigas.
  *
- * Só existe na JVM porque o `kotlinx-serialization-json` está apenas nas dependências do `jvmTest`.
+ * Roda nos quatro targets de teste (JVM, unit Android debug e release, simulador iOS): o parse usa só o `JsonElement`
+ * do `kotlinx-serialization-json` (sem plugin de serialização) e o arquivo chega por [readFixtureText], que cada
+ * plataforma implementa.
  */
 internal object RecordingLoader {
-	/** Pasta `fixtures/` da raiz do repositório; o Gradle passa em `-Dfixtures.dir`. */
-	fun fixturesDir(): File {
-		val path = System.getProperty("fixtures.dir") ?: error("system property fixtures.dir is not set (run through Gradle)")
-		return File(path)
-	}
+	/** Pasta `fixtures/` da raiz do repositório ([Fixtures.root]). */
+	fun fixturesDir(): String = Fixtures.root()
 
-	fun load(file: File): Recording = parse(file.readText(), file.path)
+	/** Lê a gravação do arquivo em [path] (absoluto). */
+	fun load(path: String): Recording = parse(readFixtureText(path), path)
+
+	/** Lê `fixtures/<relative>`. */
+	fun loadFixture(relative: String): Recording = load(Fixtures.path(relative))
 
 	fun parse(text: String, source: String): Recording {
 		val lines = text.lineSequence().withIndex().filter { it.value.isNotBlank() }.toList()

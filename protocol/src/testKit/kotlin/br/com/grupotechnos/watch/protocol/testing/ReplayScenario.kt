@@ -31,7 +31,8 @@ internal sealed interface ReplayAction {
 
 	/**
 	 * Bluetooth do telefone desligado e religado, seguido do `reconnect` que o host faz quando o Bluetooth volta
-	 * (`CoreGraph.reconnectIfPaired` no `react-native-technos-core-next`). Vem de um `03/03` no meio da gravação.
+	 * (`CoreBridge.onBluetoothTurnedOn` no `:bridge`, que o `CoreGraph` do `react-native-technos-core-next` chama). Vem
+	 * de um `03/03` no meio da gravação.
 	 *
 	 * Uma queda do link com reconexão automática, ou um `disconnect` seguido de "Reconnect last", geram os mesmos bytes
 	 * (só LOGIN e o acerto de hora automático); o ciclo de Bluetooth reproduz todos eles. Pelo contrato B
@@ -221,15 +222,20 @@ private const val ACTION_BUDGET_MS: Long = 120_000
  * corta o BIND em 20 + 20 + 5, e só assim os TX batem com o que foi gravado.
  *
  * Não fecha a sessão: o teste confere o que quiser e chama `outcome.session.close()`.
+ *
+ * @param configure ajuste do [FakeTransport] antes da primeira ação (o teste do iOS entrega os RX pela sobrecarga com
+ * `NSData`).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 internal fun TestScope.runReplay(
 	recording: Recording,
 	actions: List<ReplayAction> = ReplayScenario.deduce(recording),
 	strict: Boolean = true,
+	configure: (FakeTransport) -> Unit = {},
 ): ReplayOutcome {
 	val transport = FakeTransport()
 	transport.mtuReply = recording.header.mtu
+	configure(transport)
 	val replay = ReplayDriver(recording, transport, strict)
 	val listener = RecordingListener()
 	val logger = SessionTestLogger()

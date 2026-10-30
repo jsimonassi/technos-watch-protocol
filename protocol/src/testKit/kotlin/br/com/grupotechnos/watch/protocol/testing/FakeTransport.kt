@@ -65,6 +65,12 @@ internal class FakeTransport(
 	/** Characteristic usada em [notify]. */
 	var notifyCharacteristic: String = Profiles.SMA_NUS.notify
 
+	/**
+	 * Como [notify] entrega a notificação à sessão; `null` chama `events.onNotification(characteristic, value)`. O teste
+	 * do iOS troca pela sobrecarga com `NSData`, para o mesmo replay passar pela ponte de bytes.
+	 */
+	var deliverNotification: ((characteristic: String, value: ByteArray) -> Unit)? = null
+
 	var linkOpen: Boolean = false
 		private set
 
@@ -127,7 +133,7 @@ internal class FakeTransport(
 
 	/** Uma notificação do relógio. */
 	fun notify(value: ByteArray) {
-		events.onNotification(notifyCharacteristic, value)
+		deliverNotification?.invoke(notifyCharacteristic, value) ?: events.onNotification(notifyCharacteristic, value)
 	}
 
 	/** O link cai sozinho (relógio longe, desligado). */

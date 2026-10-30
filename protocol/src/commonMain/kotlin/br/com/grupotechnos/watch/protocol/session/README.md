@@ -23,7 +23,7 @@
 
 **Invariantes**
 
-- Todo estado mutável só é tocado na thread da sessão (paralelismo 1); chamadas e eventos só enfileiram.
+- Todo estado mutável só é tocado na thread da sessão (paralelismo 1, conferido pelo `SessionThreadingTest`); chamadas e eventos só enfileiram. A thread é lógica: um bloco por vez, mas a thread do sistema pode mudar entre blocos (no iOS, o `Dispatchers.Default` roda no pool do GCD).
 - Cada `requestId` recebe exatamente um callback terminal (`TerminalCallbackInvariantTest`).
 - Comandos só em `READY`/`SYNCING`, um de cada vez, em ordem.
 - O primeiro pareamento nunca reconecta sozinho; a reconexão nunca tem timeout, espera cada vez mais entre tentativas que falharam e desiste quando o relógio recusa o LOGIN (ADR 11).
@@ -33,4 +33,4 @@
 - `getStepsDays`/`getSleepSessions` nunca falam com o relógio e nunca bloqueiam.
 - Nada do escopo de uma conexão sobrevive à queda dela.
 
-**Testes.** `commonTest/.../session/` (`WatchSessionLifecycleTest`, `WatchSessionCommandsTest`, `BluetoothOffContractTest`, `TerminalCallbackInvariantTest`, `HistoryStoreTest`, todos com `FakeTransport` + `SmaWatchSimulator` em tempo virtual) e `jvmTest/.../session/` (`SmaSessionReplayTest`, `RealFixturesReplayTest`, com as gravações de `fixtures/`, inclusive a real do fitGPS 0.2.1).
+**Testes.** `commonTest/.../session/` (`WatchSessionLifecycleTest`, `WatchSessionCommandsTest`, `BluetoothOffContractTest`, `TerminalCallbackInvariantTest`, `HistoryStoreTest`, todos com `FakeTransport` + `SmaWatchSimulator` em tempo virtual; `RealFixturesReplayTest`, com as gravações de `fixtures/`, inclusive a real do fitGPS 0.2.1, nos quatro targets; `RealtimeReplayTest`, a gravação real no dispatcher de produção, em tempo real, com os eventos vindos de uma fila de host; `SessionThreadingTest`, que o dispatcher dos construtores públicos é serial e que as consultas síncronas logam na thread de quem chama) e `jvmTest/.../session/SmaSessionReplayTest` (a gravação sintética de ponta a ponta).

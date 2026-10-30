@@ -17,7 +17,7 @@ class Hci2JsonlTest {
 
 	@Test
 	fun expectedOutputIsAValidRecording() {
-		val recording = RecordingLoader.load(expected)
+		val recording = RecordingLoader.load(expected.path)
 		assertEquals(247, recording.header.mtu)
 		assertEquals("2026-10-28T14:30:00-03:00", recording.header.recordedAt)
 		assertEquals(
@@ -29,7 +29,7 @@ class Hci2JsonlTest {
 
 	@Test
 	fun scriptReproducesTheExpectedOutput() {
-		val script = File(RecordingLoader.fixturesDir().parentFile, "scripts/hci2jsonl.py")
+		val script = File(File(RecordingLoader.fixturesDir()).parentFile, "scripts/hci2jsonl.py")
 		val process = try {
 			ProcessBuilder("python3", "-I", script.path, File(tools, "sample-wireshark.json").path)
 				.redirectError(ProcessBuilder.Redirect.DISCARD)

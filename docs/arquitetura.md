@@ -1,8 +1,34 @@
 # Arquitetura do `technos-watch-protocol`
 
-Este documento descreve como o módulo é dividido, quem pode depender de quem, por onde passam os bytes nos dois sentidos, em que thread tudo roda, a máquina de estados da sessão e o modelo de erros. O protocolo SMA em si está em [`protocolo-sma.md`](protocolo-sma.md) e [`sma-dados.md`](sma-dados.md); as decisões e riscos, em [`decisoes.md`](decisoes.md); o formato das gravações, em [`fixtures.md`](fixtures.md).
+Este documento descreve como o repositório é dividido em módulos e pacotes, quem pode depender de quem, por onde passam os bytes nos dois sentidos, em que thread tudo roda, a máquina de estados da sessão, o modelo de erros, a ponte de bytes do host iOS (seção 11) o contrato JS comum do Core React Native, no módulo `:bridge` (seção 12), e o controlador comum que implementa cada método JS para os dois hosts (`CoreBridge`, seção 13). O protocolo SMA em si está em [`protocolo-sma.md`](protocolo-sma.md) e [`sma-dados.md`](sma-dados.md); as decisões e riscos, em [`decisoes.md`](decisoes.md); o formato das gravações, em [`fixtures.md`](fixtures.md).
 
 ## 1. Camadas
+
+Dois módulos Gradle, com a dependência num sentido só:
+
+| Módulo | Artefato | O que é | Depende de |
+|---|---|---|---|
+| `:protocol` | `br.com.grupotechnos.watch:protocol:0.1.0` | domínio, transporte, perfis, log, sessão e o protocolo SMA (o resto desta seção) | stdlib, `kotlinx-coroutines`, `kotlinx-datetime` |
+| `:bridge` | `br.com.grupotechnos.watch:bridge:0.1.0` | o contrato JavaScript do Core React Native (`EventMapper`, `StateMapper`, `SavedDataMapper`, `HostErrorCodes`, `PendingEvents`, `RequestRegistry`, seção 12), o controlador que implementa cada método JS sobre a `WatchSession` (`CoreBridge`, com a plataforma atrás de `CoreHost`, `CoreEventSink` e `CoreCompletion`, seção 13) e o conversor para Foundation do iOS; gera o framework iOS `TechnosWatchProtocol` | `:protocol` (`api`), `kotlinx-datetime` |
+
+O `:protocol` não conhece o `:bridge` (seria um ciclo, e o Gradle recusa). O host Android depende do artefato do `:bridge` pelo Maven local, que traz o do `:protocol` como `api` (o host usa os dois: o `CoreBridge` e, para montar a sessão, a `WatchSession` e o `Transport`); o host iOS consome um framework só, o guarda-chuva do `:bridge`, que exporta o `:protocol` inteiro.
+
+```mermaid
+flowchart LR
+	rnjs["JS do Core RN<br/>(TechnosCore, TechnosEvents)"]
+	android["Host Android (Repo 2)<br/>TurboModule (casca), AndroidCoreHost,<br/>BLE, store, log, conversores RN"]
+	ios["Host iOS (Repo 2, futuro)<br/>shim ObjC++, Swift, CoreBluetooth"]
+	bridge[":bridge<br/>contrato JS comum + CoreBridge<br/>(framework TechnosWatchProtocol)"]
+	protocol[":protocol<br/>sessão, domínio, SMA"]
+	rnjs --> android
+	rnjs --> ios
+	android --> bridge
+	ios --> bridge
+	bridge --> protocol
+	android --> protocol
+```
+
+Dentro do `:protocol`:
 
 ```mermaid
 flowchart TB
@@ -39,15 +65,18 @@ flowchart TB
 | `driver/` | `DeviceDriver`, `DriverLink`, `DriverNotice`, `Drivers` (internos) e `HostDriver` (público, vazio) | interna |
 | `sma/` | Protocolo SMA completo e `SmaDriver` | interna |
 | `util/` | Bytes big-endian, hexadecimal, datas | interna |
+| `ios/` (só `iosMain`) | Ponte de bytes para o host Swift: `ByteArray` ↔ `NSData` e as sobrecargas de `TransportEvents` com `NSData` (seção 11) | pública, só no iOS |
 
 **Regras de dependência**
 
 - `session/` não importa nada de `sma/`: só `driver/Drivers.create(link)` conhece as famílias. Trocar ou acrescentar uma família não toca a sessão.
 - `transport/` não conhece família nem protocolo: só bytes, UUIDs e status.
 - `driver/` e `sma/` não conhecem `ConnectionState`, listener, fila nem store; recebem um `DriverLink` pronto.
-- A API pública não usa `suspend`, `Flow`, `value class` nem tipos do `kotlinx-datetime` (Swift não os consome bem): datas são epoch millis e strings ISO. Por isso `TransportEvents`, `WatchSession` e o listener são de callback. A tarefa `./gradlew :protocol:checkObjcHeader` (parte do `check`) liga o framework do simulador e falha se o header `TechnosWatchProtocol.h` contiver `completionHandler`, `Kotlinx_coroutines`, `Kotlinx_datetime`, `Kotlinx_serialization`, `Flow` ou `Coroutine`.
+- A API pública não usa `suspend`, `Flow`, `value class` nem tipos do `kotlinx-datetime` (Swift não os consome bem): datas são epoch millis e strings ISO. Por isso `TransportEvents`, `WatchSession` e o listener são de callback. A tarefa `./gradlew :bridge:checkObjcHeader` (parte do `check`) liga o framework guarda-chuva do simulador e falha se o header `TechnosWatchProtocol.h` contiver `completionHandler`, `Kotlinx_coroutines`, `Kotlinx_datetime`, `Kotlinx_serialization`, `Flow` ou `Coroutine`, ou se a `WatchSession`, o `Transport`, a ponte de bytes ou o contrato do `:bridge` não aparecerem exatamente uma vez. A regra vale para o `:bridge` também.
 - `domain/` e `profile/` não dependem de ninguém; `transport/` também não. A única dependência de `driver/` para uma família é `Drivers` importando o `SmaDriver`.
-- Toda declaração pública tem KDoc: `./gradlew :protocol:dokkaHtml` roda com `reportUndocumented` e `failOnWarning`, então um símbolo público sem documentação quebra o build.
+- Toda declaração pública tem KDoc: `./gradlew dokkaHtml` roda nos dois módulos com `reportUndocumented` e `failOnWarning`, então um símbolo público sem documentação quebra o build. Vale também para o `iosMain` (o Dokka documenta o pacote `ios` de cada módulo no source set `iosMain`).
+- O lado positivo do header: `./gradlew :bridge:checkSwiftInterop` (parte do `check`) compila com `swiftc -typecheck` um host Swift mínimo (`bridge/swift-interop/MinimalHost.swift`) contra o framework guarda-chuva; um nome, rótulo ou tipo que esse arquivo usa e que mude no header quebra o build (`decisoes.md`, ADRs 19 a 21). Ele usa toda a `WatchSession`, os protocolos que o host implementa (inclusive `CoreHost`, `CoreEventSink` e `CoreCompletion`), `TransportEvents` nas duas formas, a ponte de bytes, o domínio que o host mapeia e todo o `CoreBridge` (lista no `README.md` da pasta); o que ficar fora dele não é conferido. `./gradlew :bridge:checkObjcInterop` faz o mesmo para o shim Objective-C++ do TurboModule (`bridge/objc-interop/MinimalTurboModule.mm`, `clang++ -fsyntax-only` com ARC e `-Werror`): cada seletor do `TWPCoreBridge` que o shim chama e os protocolos que ele implementa.
+- `ios/` só depende de `transport/` e da plataforma; nada do código comum depende dele.
 
 ## 2. Fluxo app → relógio
 
@@ -107,11 +136,15 @@ sequenceDiagram
 
 ## 4. Threading
 
-- **Uma thread lógica.** `WatchSession` cria `CoroutineScope(SupervisorJob() + context)`, com `context = Dispatchers.Default.limitedParallelism(1)` em produção. Os testes usam o construtor interno com `StandardTestDispatcher(testScheduler)` e tempo virtual. Todo estado mutável da máquina de estados é tocado só ali, sem travas.
+- **Uma thread lógica.** `WatchSession` cria `CoroutineScope(SupervisorJob() + context)`, com `context = Dispatchers.Default.limitedParallelism(1)` em produção. Os testes usam o construtor interno com `StandardTestDispatcher(testScheduler)` e tempo virtual, menos o `RealtimeReplayTest` e a sonda do `SessionThreadingTest` (abaixo). Todo estado mutável da máquina de estados é tocado só ali, sem travas. "Thread da sessão" quer dizer execução serial, não uma thread do sistema fixa: o `limitedParallelism(1)` garante um bloco por vez, em ordem, mas cada bloco pode rodar numa thread diferente do `Dispatchers.Default`. No iOS, o `Dispatchers.Default` do `kotlinx-coroutines` roda no pool do GCD, o mesmo que executa a fila de delegate do `CoreBluetooth`: a mesma thread do sistema pode servir à fila do host num momento e à sessão no seguinte, nunca as duas ao mesmo tempo.
 - **Caixa única.** Chamadas do host e eventos do `TransportEvents` entram no mesmo `Channel(UNLIMITED)` via `trySend` (nunca bloqueia nem suspende quem chama) e são tratados em ordem por uma corrotina. O tratador nunca suspende por muito tempo: configuração GATT, handshake, comandos, sync, timeouts e o debounce rodam em corrotinas filhas.
 - **Escopo por conexão.** Cada tentativa de conexão (`Attempt`) tem um escopo filho com `SupervisorJob`; quando o link cai, a sessão falha os comandos, fecha driver e link, acorda as esperas GATT com `DISCONNECTED` e cancela esse escopo. Nada da conexão antiga sobrevive para tocar a nova.
 - **Leituras de qualquer thread.** `state`, `currentAddress` e `currentProfileId` são `@Volatile`. `getStepsDays`/`getSleepSessions` leem instantâneos imutáveis do `HistoryStore`, trocados por inteiro a cada gravação; `confirmUploaded` troca o conjunto de dias confirmados na hora (compare-and-set) e grava no store depois, na thread da sessão. Os instantâneos iniciais são carregados do `SampleStore` no construtor.
-- **Callbacks.** `WatchSessionListener` e `WatchLogger` são chamados na thread da sessão (exceção: depois de `close`, um pedido novo recebe `onError(CANCELLED)` na thread de quem chamou). Exceção lançada pelo listener ou pelo logger é engolida e registrada; não derruba a sessão.
+- **Callbacks do listener.** `WatchSessionListener` é chamado na thread da sessão, um callback por vez. Única exceção: depois de `close`, quando a thread da sessão já não existe, um pedido novo recebe `onError(CANCELLED)` na thread de quem chamou, e esse callback pode coincidir com os últimos do próprio `close`. Um evento que o host ainda entrega depois do `close` não gera callback. Exceção lançada pelo listener é engolida e registrada; não derruba a sessão. O host não deve depender da identidade da thread do callback (thread-local, thread guardada para comparar), só de que os callbacks são seriais e nunca rodam na fila de callbacks do Bluetooth dele.
+- **Logger.** `WatchLogger` é chamado de mais de uma thread, às vezes ao mesmo tempo, e por isso tem de ser thread-safe (no Repo 2, o `RingLogger` do Android é sincronizado; o host iOS precisa da mesma garantia). `frame` e quase todo `log` saem na thread da sessão. Fora dela: `getStepsDays`, `getSleepSessions` e `confirmUploaded` chamam `log` na thread de quem chama, antes de retornar (dias anteriores à janela pedida, dia em formato inválido), e o construtor também, quando o `SampleStore` falha ao carregar (`SessionThreadingTest.synchronousCallsLogOnTheCallersThread`); depois de `close`, um evento que o host ainda entrega (a resposta ao `disconnect` do próprio `close`, uma notificação atrasada) é descartado com um DEBUG `Session/post` na thread do host (visto no `RealtimeReplayTest`). O logger não deve bloquear nem lançar. Se lançar, a exceção é engolida, como a do listener, nas linhas da `SessionEngine` e do `HistoryStore`: ela nunca escapa das consultas síncronas nem do construtor, e não interrompe mescla, poda nem gravação (`HistoryStoreTest.aThrowingLoggerNeverEscapes*`). O link (`frame`), o driver e o `SyncEngine` chamam o logger direto, na thread da sessão; ali ela faz a operação em andamento falhar: um `frame` que lança no RX perde a notificação, no TX falha o comando (`pendencias.md`, itens técnicos, 6).
+- **Eventos do host.** `TransportEvents` pode ser chamado de qualquer thread (no Android, a thread de callbacks do `BluetoothGatt`; no iOS, a fila de delegate do `CBCentralManager`). Cada chamada só faz um `trySend` na caixa e retorna; nunca espera a sessão.
+- **Conferido em tempo real.** O `RealtimeReplayTest` (`commonTest`, roda nos quatro targets) reproduz a gravação real com o construtor público, o dispatcher de produção e um host que entrega todos os eventos de uma fila serial própria (`dispatch_queue_create` no iOS, um executor de uma thread na JVM). Ele confere: os 167 TX e o histórico iguais aos do replay virtual; todo `TransportEvents` vindo da fila do host e retornando rápido (o mais lento medido ficou abaixo de 2 ms; o teste falha acima de 100 ms); nenhum callback do listener na fila do host (pela identidade da fila, `dispatch_get_specific` no iOS); e nenhum callback depois do `close`, nem com um evento atrasado do host. Os 59 callbacks da gravação rodaram em 1 a 3 threads do sistema, conforme a execução (`decisoes.md`, ADR 19). Ele também os vê em série, mas isso é observação desta carga, não prova do dispatcher: o replay é pergunta e resposta e uma corrotina só consome a caixa, então com `Dispatchers.Default` sem limite os callbacks também saem um por vez (mutação conferida na JVM e no iOS).
+- **Dispatcher serial, conferido direto.** O `SessionThreadingTest` (`commonTest`, os quatro targets) lança blocos no contexto de uma sessão criada por cada construtor público (`WatchSession.sessionContext`, interno). Cada bloco espera outro, sem suspender, por até 50 ms: num dispatcher serial nunca há dois ao mesmo tempo. O controle com `Dispatchers.Default` sem limite vê dois ou mais, o que prova que a sonda enxerga paralelismo no target. Trocar o `limitedParallelism(1)` por `Dispatchers.Default` falha o teste na JVM e no iOS. A sonda não pega um dispatcher que não é paralelo mas roda na thread de quem retoma a corrotina (`Dispatchers.Unconfined`); esse cai no `RealtimeReplayTest`, com callbacks na fila do host. As duas checagens se completam.
 - **Exceções inesperadas** de qualquer corrotina da sessão vão para um `CoroutineExceptionHandler` que registra `Session/uncaught` em ERROR. Os testes de sessão conferem que esse log fica vazio.
 
 ## 5. Máquina de estados
@@ -236,6 +269,147 @@ O resto (fila, sync, store, regra do terminal, listener) não muda.
 
 ## 10. Testes da sessão
 
-- `commonTest/.../testing/`: `FakeTransport` (host síncrono e controlável), `SmaWatchSimulator` (relógio SMA em nível de byte, compartilhado com os testes do driver), `ReplayDriver` + `TxMasker` (replay de gravações), `ReplayScenario` (deduz as ações de uma gravação), `RecordingListener`, `SessionTestLogger`, `TestClock`.
+- O kit de teste, em `protocol/src/testKit/` (pastas que o `:protocol` e o `:bridge` compilam nos próprios testes; `protocol/src/testKit/README.md`): `FakeTransport` (host síncrono e controlável), `SmaWatchSimulator` (relógio SMA em nível de byte, compartilhado com os testes do driver), `ReplayDriver` + `TxMasker` (replay de gravações), `ReplayScenario` (deduz as ações de uma gravação), `RecordingListener`, `SessionTestLogger`, `TestClock`, a `SessionHarness` (`runSession`) e a leitura das gravações nos quatro targets (`RecordingLoader`, o `expect` de arquivo `FixtureFiles`, com os `actual` em `testKitJvm/` e `testKitIos/`). O `:bridge` usa o mesmo kit para testar o `CoreBridge` sobre uma sessão de verdade (seção 13).
 - `commonTest/.../session/`: `WatchSessionLifecycleTest`, `WatchSessionCommandsTest`, `BluetoothOffContractTest` (contrato B), `TerminalCallbackInvariantTest`, `HistoryStoreTest`. Todos com `runTest` e tempo virtual; `runSession` fecha a sessão mesmo quando uma asserção falha (senão uma reconexão em ciclo não deixaria o teste terminar).
-- `jvmTest/`: `RecordingLoader` (e `RecordingLoaderTest`), `SmaSessionReplayTest` (gravação sintética de ponta a ponta), `RealFixturesReplayTest` (toda gravação em `fixtures/real/`, uma linha `REPLAY` por arquivo no stdout), `Hci2JsonlTest`.
+- `commonTest/.../testing/` tem o que é só do `:protocol`: `SyntheticFitGpsFixture` e o replay em tempo real, `RealtimeReplay` e a `HostQueue` (fila serial do host, `expect`/`actual`; os `actual` em `src/jvmSharedTest/`, compilado por `jvmTest` e `androidUnitTest`, e em `iosTest/`).
+- `commonTest/.../session/RealFixturesReplayTest` (toda gravação em `fixtures/real/` e a sintética, uma linha `REPLAY` por arquivo no stdout de cada target) e `RealtimeReplayTest` (a gravação real no dispatcher de produção, em tempo real, seção 4; linha `REALTIME-REPLAY`); `SessionThreadingTest` (o dispatcher dos construtores públicos é serial; o logger nas consultas síncronas, seção 4).
+- `jvmTest/`: só o que precisa da JVM: `RecordingLoaderTest` (o `java.time` como oráculo do `recordedAt`), `SmaSessionReplayTest` (gravação sintética de ponta a ponta e a regravação com `FIXTURES_REGENERATE=1`), `Hci2JsonlTest` (roda o `python3`).
+- `iosTest/.../ios/ByteBridgeTest`: a ponte de bytes do iOS (seção 11).
+
+## 11. Ponte de bytes do iOS
+
+No Swift, todo `ByteArray` da API pública aparece como `KotlinByteArray`, que só se lê byte a byte, e o `CoreBluetooth` só fala `Data`. O pacote `br.com.grupotechnos.watch.protocol.ios` (só no `iosMain`, compilado para `iosArm64` e `iosSimulatorArm64`) fecha essa distância sem mudar a API comum:
+
+| Sentido | Onde o host encontra os bytes | Swift |
+|---|---|---|
+| sessão → host | `Transport.write(service:characteristic:value:type:requestId:)`, `WatchLogger.frame(direction:characteristic:value:summary:)` (`value: KotlinByteArray`) | `let data: Data = value.toData()` |
+| host → sessão | `peripheral(_:didUpdateValueFor:error:)` de uma notificação (`characteristic.value: Data?`) | `session.events.onNotification(characteristic: uuid, data: value)` |
+| host → sessão | o mesmo callback, de uma leitura pedida por `Transport.read` | `session.events.onReadCompleted(requestId: id, data: value, status: status)` |
+| `Data` → `KotlinByteArray` | o resto da API que recebe bytes (`FrameJsonl.line`) | `ByteBridgeKt.toByteArray(data)` |
+
+```mermaid
+flowchart LR
+	cb["CBPeripheral<br/>(fila de delegate)"]
+	ev["session.events<br/>onNotification(characteristic:data:)"]
+	inbox["caixa da sessão<br/>(cópia em ByteArray)"]
+	tr["Transport.write(value: KotlinByteArray)"]
+	w["value.toData() → writeValue(_:for:type:)"]
+	cb -- "Data" --> ev --> inbox
+	inbox -. "thread da sessão" .-> tr --> w --> cb
+```
+
+- Toda conversão copia (`initWithBytes:length:` num sentido, `getBytes:length:` no outro): o host pode reutilizar o buffer, e mudar a origem depois não muda o resultado. Tamanho 0 não toca em endereço (um `NSData` vazio pode ter `bytes` nulo; um `ByteArray` vazio não tem elemento 0 para fixar).
+- As sobrecargas com `NSData` chamam o método comum: mesmo evento, mesma ordem, mesmo "retorna na hora, de qualquer thread". O rótulo é `data:`, e não `value:`, para não colidir no Objective-C com os métodos que recebem `KotlinByteArray`; o nome `toData()` vem de `@ObjCName`.
+- O `value` de `WatchLogger.frame` vai direto para `FrameJsonl.shared.line(...)`, sem conversão.
+- Tabela completa, invariantes e testes: `protocol/src/iosMain/.../ios/README.md`. A decisão: `decisoes.md`, ADR 19. O MTU que o host iOS informa (`maximumWriteValueLength(for: .withoutResponse) + 3`): KDoc de `Transport.requestMtu` e ADR 5, emenda.
+
+## 12. Contrato JS comum (`:bridge`)
+
+O Core React Native (`react-native-technos-core-next`) promete ao JavaScript os nomes e formatos do Core atual (`src/types/events.ts`, `src/specs/NativeCoreNext.ts` de lá). A parte desse contrato que não depende de plataforma mora no `:bridge`, em código comum, para os hosts Android e iOS entregarem exatamente o mesmo:
+
+| Tipo | O que garante |
+|---|---|
+| `EventMapper` | O payload de cada evento e retorno (`onScannedDevice`, `onConnectStateChanged`, `onDeviceInfo`, `onFirmwareInfo`, `onBatteryStatus`, `onPedometer`, `onHistoryPedometer`, `onHistorySleep`, `onSyncProgress`, `onError`, `onLog`, `getLastPairedDevice`) como `Map<String, Any?>`; o `date` do sono pelo início do dia no fuso do telefone. |
+| `StateMapper` | `ConnectionState` → `deviceConnectStates` (0, 1, 2, 4) e o `isConnected`. |
+| `SavedDataMapper` | `deletedSavedData`: a categoria do Core atual → `DataKind`, e cada `registered_at` → dia local, com as mesmas leituras (e recusas) do `java.time` do host Android antigo. |
+| `HostErrorCodes` | Os códigos que o host produz antes de chamar a sessão. |
+| `PendingEvents` | A fila de eventos enquanto o módulo JS não pode emitir (antes de o JS criar o TurboModule, entre um reload e outro): entrega em ordem, dentro de uma trava reentrante, capacidade 500. |
+| `RequestRegistry` | `requestId` → quem liquida a Promise e o nome do método JS (o `method` do `onError`), um terminal só; ids de 1 a `Int.MAX_VALUE`, nunca `-1`. |
+| `ios/FoundationConverter` (só iOS) | Os payloads como `NSDictionary`/`NSArray` com `CFBoolean` de verdade (seção 11 tem a ponte de bytes; esta é a dos payloads). |
+
+```mermaid
+flowchart LR
+	session["WatchSession<br/>(:protocol)"]
+	mapper["EventMapper<br/>StateMapper<br/>(:bridge, comum)"]
+	queue["PendingEvents<br/>(:bridge, comum)"]
+	wc["WritableConverter<br/>(Android, Repo 2)"]
+	fc["FoundationConverter<br/>(:bridge, iosMain)"]
+	js["emitOnX → JavaScript"]
+	session -- "domínio" --> mapper -- "payload (Map)" --> queue
+	queue -- "Android" --> wc --> js
+	queue -- "iOS" --> fc --> js
+```
+
+- **Tipos dos valores**: `Int` para inteiros, `Double` para decimais e epoch millis, `String`, `Boolean`, `null`, mapas e listas aninhados. É o que o `WritableConverter` do Android sempre recebeu; o `FoundationConverter` aplica as mesmas regras no iOS e põe os booleanos como `CFBoolean`, porque o React Native separa `true`/`false` de número pela classe (`__NSCFBoolean`), e o `KotlinBoolean` que o Kotlin/Native gera viraria `1`/`0`.
+- **Datas**: `IsoDates` (interno) lê e escreve o texto à mão, reproduzindo o `java.time`; o `kotlinx-datetime` faz só o fuso. Prova: `IsoDatesDifferentialTest` (ADR 20).
+- **Fuso**: o do telefone na hora da chamada (`TimeZone.currentSystemDefault()`); as sobrecargas com fuso são internas, porque um tipo do `kotlinx-datetime` não pode ir para o header ObjC.
+- **Exceções no iOS**: exceção Kotlin que cruza para o Swift sem `@Throws` encerra o processo. `EventMapper.startOfDayIso`, `sleepDay` e `historySleep`, que lançam `IllegalArgumentException` com um `dayKey` inválido, têm `@Throws`: no Swift são `throws`, e o erro chega como `NSError` (ADR 20).
+- **Threads**: `EventMapper`, `StateMapper` e `SavedDataMapper` não têm estado. `PendingEvents` e `RequestRegistry` são chamados de qualquer thread (a da sessão, a do módulo nativo, a principal) e usam uma trava reentrante de plataforma (`ReentrantLock` na JVM, `NSRecursiveLock` no iOS).
+- **Framework iOS**: o `:bridge` gera o `TechnosWatchProtocol` com o `:protocol` exportado (`export(project(":protocol"))`): um framework só, prefixo `TWP`, os nomes de sempre no Swift (`WatchSession`, `EventMapper`, `FoundationConverter`), e os tipos do `:protocol` uma vez só. `./gradlew assembleTechnosWatchProtocolXCFramework` → `bridge/build/XCFrameworks/{debug,release}/TechnosWatchProtocol.xcframework`.
+- **O controlador** que implementa cada método JS (checagens do host, registro do pedido, regra do `NO_DATA`, pareamento salvo, ciclo de vida) e o lado `WatchSessionListener` também é comum: `CoreBridge`, seção 13. Tabela, invariantes e testes de cada tipo: `bridge/src/commonMain/.../bridge/README.md` e `bridge/src/iosMain/.../bridge/ios/README.md`.
+
+## 13. Controlador comum (`CoreBridge`)
+
+O `CoreBridge` implementa, em código comum, cada método JS de `src/specs/NativeCoreNext.ts` (Repo 2) e o lado `WatchSessionListener` da sessão. Ele veio do host Android antigo (`NativeCoreNextModule`, `CoreSessionListener` e as regras do `CoreGraph`) sem mudar nada que o JavaScript observa: os mesmos eventos e payloads, a mesma ordem (o evento sai antes do `resolve`), as mesmas rejeições, o mesmo `NO_DATA`, as mesmas regras do pareamento salvo e da reconexão automática, o mesmo ciclo de vida. O TurboModule de cada plataforma vira uma casca: cada método chama o de mesmo nome do `CoreBridge` com uma `CoreCompletion` que embrulha a Promise. Decisão e custos: `decisoes.md`, ADR 21.
+
+```mermaid
+flowchart LR
+	js["JS (TechnosCore)"]
+	tm["TurboModule<br/>(casca: um método = uma chamada)<br/>é o CoreEventSink"]
+	core["CoreBridge (:bridge, comum)<br/>regras, RequestRegistry, PendingEvents,<br/>listener da sessão"]
+	host["CoreHost (plataforma)<br/>permissões, scan, sync em 2º plano,<br/>pareamento salvo, gravação, log"]
+	session["WatchSession (:protocol)"]
+	js -- "método + Promise" --> tm -- "método + CoreCompletion" --> core
+	core -- "comandos" --> session
+	session -- "WatchSessionListener" --> core
+	core -- "consultas e efeitos" --> host
+	core -- "emit(nome, payload)" --> tm -- "emitOnX" --> js
+	host -- "onScannedDevice, onScanFailed,<br/>onLogEntry, ganchos de Bluetooth" --> core
+```
+
+**Montagem, uma vez por processo.** O host cria a `WatchSession` com o próprio `Transport`, `WatchLogger` e `SampleStore`, liga o transporte aos `TransportEvents` e passa a sessão, o logger e o `CoreHost` ao construtor `CoreBridge(session, logger, host)`, que chama `session.setListener`. A sessão vem pronta, e não é montada dentro do controlador, porque o host já a precisa para ligar o transporte, porque o construtor da `WatchSession` é o contrato do `:protocol` que o Swift já usa, e porque os testes do controlador montam uma `WatchSession` de verdade em tempo virtual (com o dispatcher de teste, o que só um teste consegue).
+
+**Quem faz o quê.**
+
+| `CoreBridge` (comum) | Host (cada plataforma) |
+|---|---|
+| Ordem das checagens e as rejeições antecipadas (`PERMISSION_DENIED`, `BLUETOOTH_OFF`, `INVALID_ARGUMENT`, `UNSUPPORTED_DEVICE`), cada uma com `onError` (`requestId` `-1`) antes do `reject` | Responder às consultas: permissão de scan e de conexão, Bluetooth ligado, endereço válido (MAC no Android, UUID no iOS) |
+| `resolveProfile(name)` (`appName`, nome BLE ou `id`), o `requestId` de cada comando (`RequestRegistry`) e a liquidação no callback terminal | Embrulhar a Promise numa `CoreCompletion` (no iOS, o valor passa pelo `FoundationConverter`) |
+| A fila de eventos (`PendingEvents`) e quando entregá-la: no `attach`, a cada evento, no `onHostResume` | Ser o `CoreEventSink`: `canEmit` e o `emitOnX` de cada nome |
+| Os efeitos do listener, na ordem do host antigo: pareamento salvo em todo `READY` (salvo depois de um disconnect/forget do usuário), trabalho em segundo plano ligado no `onSyncStarted` e desligado no fim, no erro do sync ou fora de `READY`/`SYNCING`, cabeçalho da gravação; depois o evento; depois a liquidação | Executar os efeitos: scan, FGS (Android) ou tarefa de segundo plano (iOS), guardar o pareamento, o cabeçalho da gravação de frames |
+| A regra do `NO_DATA` do `getHistorySleep`, a janela do sono (retenção do perfil), o `deletedSavedData` (strings ou mapas, categoria, datas no fuso do telefone) | Converter os argumentos do JS para Kotlin (no Android, `ReadableConverter.toList`, pelo `getType` de cada item) |
+| `userDisconnected`, `reconnectIfPaired` (pareamento salvo, ninguém desconectou, sessão em `DISCONNECTED`/`BLUETOOTH_OFF`, Bluetooth e permissão), `emitCurrentState` | Avisar os ganchos: módulo destruído (`invalidate`), app de volta ao primeiro plano (`onHostResume`), Bluetooth desligado/ligado, relógio achado no scan, falha do scan, entrada nova no log |
+| `getLogs` (entradas → `EventMapper.log`), `setLogLevel` (0..3, inválido só loga) | O log em memória, o export para arquivo e o nível |
+| — | `Transport` (BLE), `SampleStore`, `WatchLogger`, o Bluetooth já desligado na partida (no Android, `reportBluetoothOffAtStartup`) |
+
+**`CoreHost` por plataforma.** A coluna do Android é o `AndroidCoreHost` do Repo 2 (montado pelo `CoreGraph`), que só delega para as mesmas peças que o host antigo usava; a do iOS é o plano do `CoreGraph.swift`. No Android o TurboModule já é a casca descrita acima: cada `override` é uma chamada ao `CoreBridge` com um `PromiseCompletion` (mapas e listas pelo `WritableConverter`), e a prova de equivalência com o host antigo está no `docs/arquitetura.md` do Repo 2.
+
+| Método | Quando o `CoreBridge` chama | Android (`AndroidCoreHost`) | iOS (planejado) |
+|---|---|---|---|
+| `missingScanPermission()` | `scan` | `BlePermissions.hasScanPermission` / `scanPermissionName()` (`android.permission.BLUETOOTH_SCAN` na API 31+, `ACCESS_FINE_LOCATION` na 30-) | `CBManager.authorization` diferente de `.allowedAlways` → um nome para a mensagem (ex.: `"Bluetooth"`); `null` quando autorizado |
+| `missingConnectPermission()` | `pairDevice`, `startPairingAttempt`, reconexão automática | `"BLUETOOTH_CONNECT"` sem `BlePermissions.hasConnectPermission` (API 31+); `null` na 30- | a mesma autorização do `CBManager` |
+| `isBluetoothEnabled()` | `scan`, conexão, reconexão automática | `BlePermissions.isBluetoothEnabled` | `CBCentralManager.state == .poweredOn` |
+| `isValidAddress(address)` | `pairDevice`, `startPairingAttempt` | `BluetoothAdapter.checkBluetoothAddress` | `UUID(uuidString:) != nil` |
+| `startScan()` / `stopScan()` | `scan`; `pairDevice`, `stopScan`, Bluetooth desligado | `BleScanner.start/stop` | `scanForPeripherals` sem filtro de serviço / `stopScan` |
+| `startSyncWork()` / `stopSyncWork()` | `onSyncStarted`; fim, erro ou queda do sync | `SyncForegroundService.start/stop` | `beginBackgroundTask` / `endBackgroundTask` |
+| `loadPairing()` / `savePairing()` / `clearPairing()` | `getLastPairedDevice`, reconexão, janela do sono; `READY`; `forgetDevice` (duas vezes) | `PairingPrefs` (`SharedPreferences` `corenext.pairing`) | `UserDefaults` |
+| `setRecordingDeviceName()` / `setRecordingFirmware()` | pareamento, reconexão, `onDeviceInfo` | `FrameRecorder.deviceName/firmware` | o gravador de frames do iOS |
+| `logEntries(limit)` / `exportLogs()` / `clearLogs()` / `setLogLevel(level)` | `getLogs`, `exportLogs`, `clearLogs`, `setLogLevel` | `RingLogger.entries/writeTo/clear/minLevel`; o `exportLogs` grava frames e log em `getExternalFilesDir(null)/corenext/` | anel em memória + `os_log`; export para o diretório de documentos (`throws` no Swift) |
+
+**Ganchos do processo.** `attach(sink)` na primeira chamada de um método JS de cada instância do módulo (no Android, o antigo `graph()`); `invalidate(sink)` quando a instância morre (rejeita com `CANCELLED`, `"Module invalidated"`, toda Promise pendente); `onHostResume()` ao voltar ao primeiro plano (entrega a fila e reconecta); `onBluetoothTurnedOff()` (para o scan) e `onBluetoothTurnedOn()` (reconecta, chamado depois de o transporte entregar `onBluetoothStateChanged(true)` à sessão); `onScannedDevice`/`onScanFailed` do scanner; `onLogEntry` do logger (o `onLog` não entra na fila). Os três primeiros só para um módulo que se ligou.
+
+**Inventário resumido** (o completo, com as linhas do host antigo, está nos testes de contrato e no README do pacote):
+
+| Método JS | Checagens | Evento(s) | Liquidação | Efeitos |
+|---|---|---|---|---|
+| `initialize`, `initSMASDK` | — | `onConnectStateChanged` do estado atual (fase `null`), relido até ficar estável | `resolve(null)` depois | reconexão automática (`"initialize"`) |
+| `scan` | permissão de scan, Bluetooth | `onError` (`-1`, `method` `scan`) se falhar | sem Promise | `startScan` |
+| `pairDevice` | permissão de conexão, Bluetooth, endereço, nome | os estados da sessão | `resolve(null)` no `READY`; `onError` + `reject` na falha | `stopScan`, `userDisconnected = false`, nome da gravação |
+| `startPairingAttempt` | as mesmas | os estados; `onError` com o método na falha | `resolve(null)` **na hora** | sem `stopScan` |
+| `disconnectCurrentDevice` | — | `DISCONNECTED` | `resolve(null)` | `userDisconnected = true` |
+| `forgetDevice` | — | `DISCONNECTED` | `resolve(null)` | `userDisconnected = true`, `clearPairing` no pedido e de novo no fim, com `onCompleted` ou `onError` (se ninguém pareou no meio) |
+| `isConnected`, `getLastPairedDevice` | — | — | `Boolean`; `{deviceId, name, profileId}` ou `null` | — |
+| `getDeviceInfo` / `getFirmwareInfo` | — | só `onDeviceInfo` / só `onFirmwareInfo`; sem pedido registrado, os dois | `resolve(null)` depois | firmware e nome da gravação |
+| `getBatteryStatus`, `refreshSteps` | — | `onBatteryStatus`, `onPedometer` | `resolve(null)` depois | — |
+| `setTime` | — | — | `resolve(null)` | — |
+| `syncDataHistory` | — | `onSyncStarted`, `onSyncProgress`…, `onSyncFinished` | `resolve(null)` depois | `startSyncWork` antes do `onSyncStarted`, `stopSyncWork` antes do `onSyncFinished` (ou do `onError`) |
+| `getHistoryPedometer` | — | `onHistoryPedometer` (lista vazia também) | `resolve(null)` depois; `IO_ERROR` | — |
+| `getHistorySleep` | — | `onHistorySleep`, ou `onError` `NO_DATA` (`"No sleep sessions stored"`) | `resolve(null)` depois; `reject(NO_DATA)`; `IO_ERROR` | — |
+| `deletedSavedData` | — | — | sem Promise | `confirmUploaded` por tipo; WARN/INFO no log |
+| `getLogs`, `exportLogs`, `clearLogs`, `setLogLevel` | — | `onError` `IO_ERROR` se o export lançar qualquer `Exception` (`IOException` no Android, `NSError` no iOS) | lista de entradas; caminho | o log do host |
+
+Toda falha de comando que vem da sessão sai como `onError` com o nome do método JS (`method` `null` para a reconexão automática e para eventos espontâneos) e depois rejeita com o mesmo código e mensagem. As linhas de log do controlador têm a tag `CoreBridge/<método>` (no host antigo eram `CoreGraph/…`, `CoreSessionListener/…` e `NativeCoreNextModule/…`); as mensagens não mudaram.
+
+**Threads.** Os métodos JS chegam da thread dos módulos nativos do React Native; os callbacks da sessão, da thread lógica dela; os ganchos, da principal ou da do Bluetooth; o `onLogEntry`, de qualquer uma. O estado compartilhado é o mesmo do host antigo: a fila e os pedidos em andamento são travados, e os dois sinalizadores (`userDisconnected`, o sync em andamento) são `@Volatile`. O `CoreEventSink.emit` roda dentro da trava reentrante da fila: não deve bloquear e pode voltar a chamar o controlador.
+
+**Testes.** No `commonTest` do `:bridge`, nos quatro targets, sobre uma `WatchSession` de verdade com o kit de teste do `:protocol` (transporte falso, relógio SMA simulado, tempo virtual; `protocol/src/testKit/README.md`): um teste por linha do inventário, um `FakeCoreHost` e um `CoreEventSink` que gravam tudo num diário só (para conferir a ordem), e o `CoreBridgeGoldenTest`, que passa a gravação real do fitGPS pelo controlador, método JS por método JS, e compara o diário inteiro com `bridge/golden/` (com o replay estrito: `TX matched 167/167`). Do lado iOS, o `checkSwiftInterop` e o `checkObjcInterop` conferem que o Swift (um `CoreHost`, uma `CoreCompletion` e um `CoreEventSink` em Swift chamando todo o `CoreBridge`) e o shim Objective-C++ compilam contra o framework.

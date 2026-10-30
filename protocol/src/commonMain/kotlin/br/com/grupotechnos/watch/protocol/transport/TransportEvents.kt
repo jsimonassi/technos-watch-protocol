@@ -8,6 +8,10 @@ package br.com.grupotechnos.watch.protocol.transport
  * que a sessão processa na sua própria thread.
  *
  * `status` segue [GattStatus]: `0` é sucesso, qualquer outro valor é falha.
+ *
+ * No iOS, [onNotification] e [onReadCompleted] também aceitam `NSData` (no Swift, `Data`): são as sobrecargas
+ * `onNotification(characteristic:data:)` e `onReadCompleted(requestId:data:status:)` do pacote
+ * `br.com.grupotechnos.watch.protocol.ios`, que copiam os bytes e chamam estes métodos.
  */
 public class TransportEvents internal constructor(
 	private val sink: (TransportEvent) -> Unit,

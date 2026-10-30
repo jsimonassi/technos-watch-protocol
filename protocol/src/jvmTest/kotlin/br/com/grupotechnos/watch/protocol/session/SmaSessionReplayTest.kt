@@ -49,7 +49,7 @@ class SmaSessionReplayTest {
 
 	@Test
 	fun scenarioIsDeducedFromTheTxFrames() {
-		val recording = RecordingLoader.load(fixture)
+		val recording = RecordingLoader.load(fixture.path)
 		assertEquals(
 			listOf("03/01", "03/03", "02/01", "02/01", "02/08", "02/0A", "05/41", "05/41", "05/45"),
 			ReplayScenario.txFrames(recording),
@@ -59,7 +59,7 @@ class SmaSessionReplayTest {
 
 	@Test
 	fun pairSetTimeBatteryVersionSyncReplays() = runTest {
-		val recording = RecordingLoader.load(fixture)
+		val recording = RecordingLoader.load(fixture.path)
 		val outcome = runReplay(recording, actions)
 		try {
 			assertTrue(outcome.replay.problems().isEmpty(), outcome.replay.problems().joinToString("\n"))
@@ -117,7 +117,7 @@ class SmaSessionReplayTest {
 
 	@Test
 	fun strictReplayCatchesAMissingOrChangedTx() = runTest {
-		val recording = RecordingLoader.load(fixture)
+		val recording = RecordingLoader.load(fixture.path)
 		// Uma gravação em que o relógio esperava a versão antes da bateria: a sessão manda bateria primeiro.
 		val swapped = Recording(recording.header, swapBatteryAndVersion(recording), "swapped")
 		val outcome = runReplay(swapped, actions)

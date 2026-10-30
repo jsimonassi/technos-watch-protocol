@@ -1,0 +1,34 @@
+# `swift-interop/` — host Swift mínimo para o portão de interoperabilidade
+
+**Propósito.** `MinimalHost.swift` faz o papel de um host iOS do jeito que o Swift enxerga o framework `TechnosWatchProtocol` (o framework guarda-chuva do `:bridge`, com o `:protocol` exportado inteiro; `docs/decisoes.md`, ADR 20): implementa `Transport` (convertendo o `value` de `write` para `Data`), `WatchLogger`, `SampleStore`, `WatchSessionListener` e `WatchClock`, monta uma `WatchSession` com os dois construtores públicos e entrega bytes pela ponte do `iosMain` (`session.events.onNotification(characteristic:data:)`, `session.events.onReadCompleted(requestId:data:status:)`, `value.toData()`, `ByteBridgeKt.toByteArray(_:)`).
+
+**O que é conferido.** Só o que o arquivo usa; um símbolo público que não aparece nele pode mudar sem a tarefa notar. Hoje ele usa:
+
+- `WatchSession`: os dois construtores, `events`, `state`, `currentAddress`, `currentProfileId`, `companion.NO_REQUEST_ID`, `setListener`, `pair`, `reconnect`, `disconnect`, `readDeviceInfo`, `readBattery`, `setTime`, `refreshSteps`, `syncHistory`, `getStepsDays`, `getSleepSessions`, `confirmUploaded` e `close`;
+- os protocolos que o host implementa (`Transport`, `WatchLogger`, `SampleStore`, `WatchSessionListener`, `WatchClock`) e todos os métodos de `TransportEvents`, nas duas formas (`KotlinByteArray` e `Data`);
+- o domínio que o host mapeia: `DeviceInfo`, `Battery`, `StepsDay`, `StepsSample`, `SleepSession`, `SleepStage`, `SleepStageType`, `DataKind`, `ConnectionState` (todos os casos) e `WatchErrorCodes` (todos os códigos);
+- perfis e transporte: `Profiles`, `DeviceRegistry`, `DeviceProfile`, `Quirks` (`requestMtu`, `maxFragment`, os timeouts de conexão e de comando, a retenção e a agregação de passos), `GattCandidate`, `Family`, `DiscoveredService`, `DiscoveredCharacteristic`, `GattStatus`, `GattUuid`, `WriteType`;
+- log: `LogLevel`, `FrameDirection`, `FrameJsonl` (`header` e `line`), `NoopWatchLogger`, `InMemorySampleStore`, `SystemWatchClock`;
+- o contrato JS do `:bridge`, como o host iOS vai usá-lo (`exerciseBridge()`): `FoundationConverter` (`toDictionary(payload:)`, `toArray(values:)` e o valor solto `toArray(values: [value])[0]`), `EventMapper` (`battery`, `connectStateChanged`, `error`, `log`, e `startOfDayIso`, `sleepDay` e `historySleep` com `try`, porque têm `@Throws`: um `dayKey` inválido chega ao Swift como erro em vez de encerrar o processo), `StateMapper` (as constantes, `isConnected`, `toDeviceConnectState`), `HostErrorCodes` (todos os códigos) e `SavedDataMapper` (`dayKeys`, `dayKey`, `kindForCategory`, `CATEGORY_PEDOMETER`, `SavedDataMapper.Result`);
+- o controlador (`exerciseCoreBridge()`): `CoreHost` (`MinimalCoreHost`, todos os métodos, inclusive o `exportLogs() throws`), `CoreCompletion` (`MinimalCompletion`, que passa o valor pelo `FoundationConverter` antes do `resolve`), `CoreEventSink` (`MinimalEventSink`, que converte o payload com `toDictionary(payload:)`), `CorePairing`, `CoreLogEntry`, e **todo** método público do `CoreBridge`: o construtor `CoreBridge(session:logger:host:)`, os 23 métodos do spec (com `doInitSMASDK(completion:)`, o nome que o Kotlin/Native dá ao `initSMASDK`) e os ganchos `attach(sink:)`, `invalidate(sink:)`, `onHostResume()`, `onBluetoothTurnedOff()`, `onBluetoothTurnedOn()`, `onScannedDevice(profile:address:rssi:bleName:)`, `onScanFailed(errorCode:message:)` e `onLogEntry(entry:)`.
+
+Ficam de fora os inicializadores que o host não chama (`DeviceProfile(...)`, `Quirks(...)`), os `doCopy`, o `BindPayloadKind`, o `HostDriver` (vazio), e o resto do `EventMapper`, a `PendingEvents` e o `RequestRegistry`, que o `CoreBridge` usa por dentro (o Swift não os chama). O lado Objective-C++ (o shim do TurboModule) tem o portão próprio: `bridge/objc-interop/`.
+
+O arquivo não roda nem fala com Bluetooth. A tarefa `./gradlew :bridge:checkSwiftInterop` (grupo `verification`, ligada ao `check`, só em macOS) liga o framework de debug do `iosSimulatorArm64` e roda:
+
+```
+xcrun --sdk iphonesimulator swiftc -typecheck -warnings-as-errors -target arm64-apple-ios15.1-simulator \
+	-F bridge/build/bin/iosSimulatorArm64/debugFramework \
+	-module-cache-path bridge/build/tmp/checkSwiftInterop/ModuleCache \
+	bridge/swift-interop/MinimalHost.swift
+```
+
+O 15.1 é o mínimo do pod do `react-native-technos-core-next`. A saída do `swiftc` fica em `bridge/build/reports/swiftInterop/swiftc.txt`. A pasta morava em `protocol/swift-interop/` até o framework passar para o `:bridge`.
+
+**Por que existe.** O `checkObjcHeader` só procura o que não pode aparecer no header (`suspend`, `Flow`, tipos do kotlinx). Isto confere o contrário: que os nomes, rótulos e tipos que este arquivo usa continuam existindo. Renomear um parâmetro em Kotlin (por exemplo `data` → `payload` em `onNotification`, ou `kinds` → `dataKinds` em `syncHistory`) muda o seletor e o rótulo no Swift, e a tarefa falha com `incorrect argument label in call`.
+
+**Inputs da tarefa.** Os `.swift` desta pasta e o `Headers/` e `Modules/` do framework (header e module map). Mudou a API pública ou o arquivo Swift, a tarefa roda de novo; sem mudança, fica `UP-TO-DATE`. O binário do framework não é input: o `-typecheck` não liga.
+
+**Ao mudar a API pública.** Se a mudança é intencional, ajuste `MinimalHost.swift` na mesma alteração (é o que o `CentralTransport` do Repo 2 vai ter de mudar também). Símbolo público novo que o host vai usar entra no arquivo na mesma alteração; senão, fica sem conferência. Se o arquivo precisa de um nome novo, use a grafia que o header gerado mostra (`bridge/build/bin/iosSimulatorArm64/debugFramework/TechnosWatchProtocol.framework/Headers/TechnosWatchProtocol.h`, atributo `swift_name`).
+
+**Fica de fora.** Testes de comportamento (a sessão e o `CoreBridge` são testados em Kotlin, inclusive no simulador) e o host de verdade (`CentralTransport` e `CoreGraph.swift`, no Repo 2). Decisão: `docs/decisoes.md`, ADRs 19 a 21.

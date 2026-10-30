@@ -4,7 +4,7 @@
 
 **Tipos.** `Transport` (connect/disconnect, descoberta, notificações, MTU, write, read), `TransportEvents` (classe concreta, um método por callback, cada um só enfileira na sessão), `TransportEvent` (interno, os mesmos eventos como valores), `WriteType`, `GattStatus`, `DiscoveredService`/`DiscoveredCharacteristic`, `GattUuid.normalize`.
 
-**Fica de fora.** Scan (o host faz e usa `DeviceRegistry.identify`), escolha do serviço (sessão, pela ordem do perfil), fragmentação e ACK (driver).
+**Fica de fora.** Scan (o host faz e usa `DeviceRegistry.identify`), escolha do serviço (sessão, pela ordem do perfil), fragmentação e ACK (driver). As versões com `NSData` de `onNotification` e `onReadCompleted` e a conversão do `value` de `write` para `Data` são do pacote `ios/`, só no `iosMain` (`docs/arquitetura.md`, seção 11).
 
 **Dependências.** Nenhuma além da biblioteca padrão. Quem depende: `session/` (consome os eventos e chama o `Transport`), `driver/`/`sma/` (só `WriteType`) e o host.
 
@@ -16,6 +16,7 @@
 - **Bluetooth desligado, contrato B** (`docs/decisoes.md`, ADR 18): o host entrega `onBluetoothStateChanged(false)` e **nenhum** `onDisconnected` pelos links abertos e conexões pendentes que isso derrubou, nem antes nem depois; depois disso, `disconnect()` não emite nada até um novo `connect()`. Um `onDisconnected` entregue antes do `onBluetoothStateChanged(false)` (o stack reportou a queda antes do aviso) é uma queda comum. O `CoreBluetooth` já se comporta assim (`poweredOff` sem `didDisconnectPeripheral`); no Android o host suprime os `onDisconnected` que o `BluetoothGatt` entrega ao desligar.
 - Eventos na ordem em que aconteceram; `TransportEvents` pode ser chamado de qualquer thread e nunca bloqueia.
 - `connect(autoReconnect = true)` mantém a conexão pendente sem timeout (Android `autoConnect = true`).
-- O host copia o array da notificação se a plataforma reutilizar o buffer.
+- O host copia o array da notificação se a plataforma reutilizar o buffer (no iOS, a sobrecarga com `NSData` já copia).
+- `requestMtu` responde com o MTU efetivo; no iOS, `maximumWriteValueLength(for: .withoutResponse) + 3`, nunca o valor de `.withResponse` (KDoc de `Transport.requestMtu`, ADR 5).
 
-**Testes.** `commonTest/.../testing/FakeTransport` implementa o contrato (inclusive o contrato B em `setBluetooth`) e é usado por todos os testes de sessão; `BluetoothOffContractTest` cobre o Bluetooth desligado.
+**Testes.** `testKit/.../testing/FakeTransport` (o kit de teste compartilhado com o `:bridge`, `protocol/src/testKit/README.md`) implementa o contrato (inclusive o contrato B em `setBluetooth`) e é usado por todos os testes de sessão; `BluetoothOffContractTest` cobre o Bluetooth desligado.

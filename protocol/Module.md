@@ -12,8 +12,11 @@ O host (o Core React Native, ou um app nativo) implementa três interfaces e con
   os resultados chegam por [br.com.grupotechnos.watch.protocol.session.WatchSessionListener].
 
 Tudo o que é protocolo de fabricante (frame, CRC, handshake, catálogo de comandos do SMA) é `internal` e não aparece
-aqui. A API não usa `suspend`, `Flow` nem tipos do `kotlinx-datetime`, para o Swift consumir o framework sem shim
-(a tarefa `checkObjcHeader` confere o header gerado).
+aqui. A API não usa `suspend`, `Flow` nem tipos do `kotlinx-datetime`, para o Swift consumir o framework sem shim.
+O framework iOS `TechnosWatchProtocol` é gerado pelo módulo `technos-watch-bridge` (`:bridge`), que exporta este módulo
+inteiro, com os mesmos nomes; lá ficam as tarefas `checkObjcHeader` (confere o header gerado) e `checkSwiftInterop`
+(compila um host Swift mínimo contra ele). Este módulo não depende do `:bridge`. No iOS, o pacote
+`br.com.grupotechnos.watch.protocol.ios` converte os bytes entre `ByteArray` e `NSData` (`Data` no Swift).
 
 Documentação de desenho no repositório: `docs/arquitetura.md` (camadas, threading, máquina de estados, erros),
 `docs/protocolo-sma.md` (protocolo byte a byte), `docs/sma-dados.md`, `docs/fixtures.md`, `docs/decisoes.md`,
@@ -47,3 +50,10 @@ internos (`DeviceDriver`, `DriverLink`) não é público.
 # Package br.com.grupotechnos.watch.protocol.log
 
 `WatchLogger`, que o host implementa, e `FrameJsonl`, o formato das gravações de tráfego usadas como fixtures.
+
+# Package br.com.grupotechnos.watch.protocol.ios
+
+Só no iOS (`iosMain`): a ponte de bytes do host Swift. `ByteArray.toNSData()` (no Swift, `value.toData()`) para o que a
+sessão entrega em `Transport.write` e `WatchLogger.frame`; `NSData.toByteArray()` (`ByteBridgeKt.toByteArray(data)`);
+e as sobrecargas de `TransportEvents` que recebem o `Data` do `CoreBluetooth` direto
+(`onNotification(characteristic:data:)`, `onReadCompleted(requestId:data:status:)`). Toda conversão copia.

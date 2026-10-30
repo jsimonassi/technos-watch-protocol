@@ -57,7 +57,7 @@ Termos usados no código, nos KDocs e nos outros documentos. Quando o termo tem 
 
 | Termo | Significado |
 |---|---|
-| **Host** | Quem usa a biblioteca e é dono do BLE da plataforma: hoje o Core React Native Android (`react-native-technos-core-next`); no futuro, o iOS. Implementa `Transport`, `WatchLogger` e `SampleStore`. |
+| **Host** | Quem usa a biblioteca e é dono do BLE da plataforma: hoje o Core React Native Android (`react-native-technos-core-next`); no futuro, o iOS. Implementa `Transport`, `WatchLogger` e `SampleStore` (`:protocol`) e, sobre o `CoreBridge`, `CoreHost`, `CoreEventSink` e `CoreCompletion` (`:bridge`). |
 | **Transport** | A interface que o host implementa sobre `BluetoothGatt`/`CoreBluetooth`. Só bytes, UUIDs e status; o resultado de cada operação volta por `TransportEvents`. |
 | **Sessão** | `WatchSession`, a fachada única do host: conexão, handshake, fila de comandos, sincronização, reconexão e consultas ao histórico. |
 | **Profile / perfil** | `DeviceProfile`: tudo o que se sabe de um modelo (nomes de advertising, candidatos GATT, quirks). Hoje só `Profiles.MORMAII_FIT_GPS` (`id = "fitgps"`). |
@@ -69,7 +69,9 @@ Termos usados no código, nos KDocs e nos outros documentos. Quando o termo tem 
 | **requestId** | Número que o host passa em cada comando e que volta no callback. Cada `requestId` recebe exatamente um **callback terminal** (`onDeviceInfo`, `onBattery`, `onLiveSteps`, `onSyncFinished`, `onCompleted` ou `onError`). |
 | **NO_REQUEST_ID** | `-1`: o `requestId` dos eventos que o relógio provoca sozinho (ex.: `onLiveSteps` depois de um aviso `02/70`). |
 | **Estados** | `ConnectionState`: `DISCONNECTED`, `CONNECTING`, `CONFIGURING`, `HANDSHAKING`, `READY`, `SYNCING`, `RECONNECTING`, `BLUETOOTH_OFF` (diagrama em `arquitetura.md`, seção 5). |
-| **Thread da sessão** | O dispatcher de paralelismo 1 onde roda todo o estado da sessão e de onde saem todos os callbacks (`arquitetura.md`, seção 4). |
+| **Thread da sessão** | O dispatcher de paralelismo 1 onde roda todo o estado da sessão e de onde saem todos os callbacks (`arquitetura.md`, seção 4). É uma thread **lógica**: um bloco por vez, em ordem, mas a thread do sistema pode mudar entre um bloco e outro (no iOS, o `Dispatchers.Default` roda no pool do GCD). |
+| **Fila do host** | A fila serial de onde o host entrega os eventos BLE (a fila de delegate do `CBCentralManager` no iOS, a thread de callbacks do `BluetoothGatt` no Android). Nos testes, `HostQueue` (`dispatch_queue_create` no iOS, um executor de uma thread na JVM). |
+| **Ponte de bytes** | O pacote `ios/`, só no `iosMain`: `value.toData()` (`KotlinByteArray` → `Data`), `ByteBridgeKt.toByteArray(data)` e as sobrecargas `onNotification(characteristic:data:)` e `onReadCompleted(requestId:data:status:)`, que copiam os bytes (`arquitetura.md`, seção 11). |
 | **Sync** | `syncHistory`: lê o histórico de passos (e de sono, se pedido) do relógio e grava no `SampleStore`, com progresso de 0 a 100 (0, 50 e 100 quando lê passos e sono). |
 | **SampleStore** | Persistência do histórico que o host implementa (no Core RN, arquivos JSON). A sessão grava tudo o que lê e responde as consultas só a partir dele. |
 | **StepsSample** | Uma amostra de passos (no SMA, o total de uma hora), com calorias e distância estimadas. |
@@ -87,19 +89,35 @@ Termos usados no código, nos KDocs e nos outros documentos. Quando o termo tem 
 | Termo | Significado |
 |---|---|
 | **Fixture** | Gravação do tráfego GATT, pacote a pacote, num `.jsonl` (`docs/fixtures.md`). **Sintética** quando gerada pelo codec (`fixtures/synthetic/`); **real** quando gravada do relógio (`fixtures/real/<perfil>/<firmware>/`). |
-| **Replay** | Rodar a sessão inteira contra uma fixture: o `ReplayDriver` confere cada TX com o gravado e devolve os RX gravados (`SmaSessionReplayTest`, `RealFixturesReplayTest`). |
+| **Replay** | Rodar a sessão inteira contra uma fixture, em tempo virtual: o `ReplayDriver` confere cada TX com o gravado e devolve os RX gravados (`RealFixturesReplayTest`, nos quatro targets de teste; `SmaSessionReplayTest`, só na JVM). |
+| **Replay em tempo real** | O `RealtimeReplayTest`: a gravação real com o construtor público da `WatchSession` (dispatcher de produção), esperas de verdade e os eventos entregues por uma fila do host. É o teste de fumaça do threading (`fixtures.md`, seção 4.2). Imprime a linha `REALTIME-REPLAY`. |
+| **Sonda do dispatcher** | O `SessionThreadingTest.publicConstructorsRunTheSessionOnASerialDispatcher`: blocos lançados no contexto da sessão que esperam um parceiro sem suspender, com um controle em `Dispatchers.Default` sem limite. Prova que o dispatcher dos construtores públicos é serial, o que o replay em tempo real não distingue (`arquitetura.md`, seção 4). |
 | **Máscara** | O que o replay estrito ignora ao comparar um TX: o seq de todo frame e, só no `02/01`, o value (a hora muda a cada execução) e o CRC que o cobre (`TxMasker`). |
 | **TX / RX** | `FrameDirection`: TX é escrita do telefone, RX é notificação do relógio. |
 | **FrameJsonl** | O formatador do `.jsonl` (cabeçalho + uma linha por pacote), o mesmo no host e nos testes. |
 | **FakeTransport** | Host falso, síncrono e controlável, usado por todos os testes de sessão. Segue o contrato B no Bluetooth desligado. |
 | **Export cumulativo** | Cada **Export** do app de exemplo contém tudo desde o último **Clear**, então um export é prefixo exato do seguinte. Só o último vira fixture (`fixtures.md`, seção 3.1). |
-| **Linha `REPLAY`** | A linha que o `RealFixturesReplayTest` imprime por arquivo reproduzido (caminho, pacotes, TX conferidos, estado final). É a prova de que a gravação rodou. |
+| **Linha `REPLAY`** | A linha que o `RealFixturesReplayTest` imprime por arquivo reproduzido (caminho, pacotes, TX conferidos, estado final), no `system-out` do XML de cada tarefa de teste. É a prova de que a gravação rodou naquele target. |
+| **`SIMCTL_CHILD_`** | Prefixo das variáveis de ambiente que o `xcrun simctl spawn` repassa ao processo no simulador, sem o prefixo. É como o caminho de `fixtures/` chega ao `iosSimulatorArm64Test` (`SIMCTL_CHILD_FIXTURES_DIR` → `FIXTURES_DIR`). |
 | **`SmaDriver/frame`** | Linha de log em DEBUG, uma por frame de dados completo, em cada sentido: `TX seq=… cmd/key NOME len=…` e `RX seq=… cmd/key NOME len=… crc=ok` (`log/README.md`). |
 | **Pendências** | A validação no relógio que ficou para depois e os itens técnicos abertos, em `docs/pendencias.md`. |
 | **SmaWatchSimulator** | Relógio SMA simulado em nível de byte, usado pelos testes do driver e da sessão: responde BIND, LOGIN, bateria e versão por padrão, e cada teste programa as outras respostas (páginas de histórico, recusas, silêncio). |
 | **Tempo virtual** | O relógio do `kotlinx-coroutines-test`: os testes avançam 60 s de BIND sem esperar. |
 | **ADR** | Architecture Decision Record: uma entrada curta em `docs/decisoes.md` com contexto, decisão e como reverter. |
 | **KMP** | Kotlin Multiplatform: o mesmo código `commonMain` compilado para Android (AAR), JVM e iOS (framework). |
-| **XCFramework** | O pacote de frameworks iOS (dispositivo e simulador) que o host iOS vai consumir; gerado por `assembleTechnosWatchProtocolXCFramework`. |
-| **Header ObjC** | `TechnosWatchProtocol.h`, a API que o Swift enxerga. A tarefa `checkObjcHeader` falha se ele expuser `suspend`, `Flow` ou tipos do kotlinx. |
+| **XCFramework** | O pacote de frameworks iOS (dispositivo e simulador) que o host iOS vai consumir; gerado pelo `:bridge` com `assembleTechnosWatchProtocolXCFramework`, em `bridge/build/XCFrameworks/`. |
+| **Framework guarda-chuva** | O framework `TechnosWatchProtocol` gerado pelo `:bridge` com o `:protocol` exportado (`export(project(":protocol"))`): um framework só, com a sessão e o contrato JS, e os tipos do `:protocol` uma vez só e sem prefixo de módulo (ADR 20). |
+| **Contrato JS** | O que o JavaScript do Core React Native vê: nomes de evento, payloads (`src/types/events.ts` do Repo 2), códigos de estado e de erro, `deletedSavedData`. A parte comum aos dois hosts mora no `:bridge` (`arquitetura.md`, seção 12). |
+| **`CFBoolean`** | O booleano do Core Foundation (`__NSCFBoolean`, `kCFBooleanTrue`/`kCFBooleanFalse`). O React Native só entrega `true`/`false` ao JS para essa classe; um `KotlinBoolean` vira `1`/`0`. Por isso o `FoundationConverter` monta os payloads pelo Core Foundation. |
+| **Teste diferencial** | Um teste que roda a implementação nova e uma antiga (o oráculo) sobre as mesmas entradas e exige a mesma saída: o `IsoDatesDifferentialTest` compara as datas do `:bridge` com o `java.time` do host Android antigo, linha `DIFFERENTIAL` no XML. |
+| **Header ObjC** | `TechnosWatchProtocol.h`, a API que o Swift enxerga (o header guarda-chuva do `:bridge`). A tarefa `checkObjcHeader` falha se ele expuser `suspend`, `Flow` ou tipos do kotlinx, ou se a `WatchSession`, o `Transport`, a ponte de bytes ou o contrato do `:bridge` não aparecerem exatamente uma vez. |
+| **`checkSwiftInterop`** | A tarefa que compila com `swiftc -typecheck` um host Swift mínimo (`bridge/swift-interop/MinimalHost.swift`) contra o framework guarda-chuva; falha se um nome, rótulo ou tipo que esse arquivo usa mudar no header. Só confere o que o arquivo usa (`decisoes.md`, ADRs 19 e 20). |
+| **`checkObjcInterop`** | A tarefa que compila com `clang++ -fsyntax-only` (ARC, módulos, C++20, `-Werror`) um TurboModule mínimo em Objective-C++ (`bridge/objc-interop/MinimalTurboModule.mm`) contra o framework guarda-chuva: cada seletor do `TWPCoreBridge` que o shim do iOS chama e os protocolos que ele implementa. Faz parte do `check`. |
+| **`CoreBridge`** | O controlador do Core React Native em código comum (`:bridge`): um método por método JS do spec e o lado `WatchSessionListener` da sessão, com as regras do host Android antigo (checagens, ordem evento/`resolve`, `NO_DATA`, pareamento salvo, reconexão automática, ciclo de vida). O TurboModule de cada plataforma só o chama (`docs/arquitetura.md`, seção 13; ADR 21). |
+| **`CoreHost`** | O que o `CoreBridge` pede à plataforma, um por processo: permissões, Bluetooth, endereço válido, scan, trabalho em segundo plano no sync, pareamento salvo, cabeçalho da gravação e log. No Android é o `AndroidCoreHost` do Repo 2 (montado pelo `CoreGraph`); no iOS será o `CoreGraph.swift`. |
+| **`CoreEventSink`** | A instância atual do módulo JS como destino dos eventos (`canEmit`, `emit`). Separado do `CoreHost` porque o módulo é recriado a cada reload do JS; o `CoreBridge` guarda os eventos na fila enquanto não há módulo pronto. |
+| **`CoreCompletion`** | O par `resolve(value)`/`reject(code, message)` que o host monta sobre a Promise do React Native; o `CoreBridge` liquida cada uma exatamente uma vez. |
+| **Diário (golden do `CoreBridge`)** | A sequência única de eventos, liquidações e efeitos no host que os testes do `CoreBridge` gravam (`Journal`), e o arquivo de referência em `bridge/golden/` com o diário da gravação real passando pelo controlador, método JS por método JS. Regenerar só com `BRIDGE_GOLDEN_REGENERATE=1`, revisando o diff. |
+| **Kit de teste compartilhado** | O transporte falso, o relógio SMA simulado, a `SessionHarness`, o replay e a leitura das fixtures, em `protocol/src/testKit*`: pastas que o `:protocol` e o `:bridge` compilam nos próprios testes, sem publicar código de teste. |
+| **Módulo amigo** | Um módulo cujo `internal` o compilador deixa outro enxergar (`friendPaths`, `-friend-modules`). As compilações de teste do `:bridge` tratam o `:protocol` assim, para o kit de teste compartilhado funcionar; o código principal, não (ADR 21). |
 | **Core atual** | O `react-native-technos-ware-core` 4.x (`TechnosWareCore`), com as SDKs dos fabricantes; é a referência de comportamento citada nos documentos (`SMAService.java`, `SMAService.m`). |

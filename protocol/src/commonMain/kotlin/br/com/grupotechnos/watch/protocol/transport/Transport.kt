@@ -64,7 +64,16 @@ public interface Transport {
 
 	/**
 	 * Pede um MTU ATT maior. Termina com `onMtuChanged(requestId, mtu, status)`.
-	 * No iOS, onde o MTU não é negociável pelo app, o host responde com o MTU efetivo do link.
+	 *
+	 * O valor devolvido decide o tamanho de cada escrita: a sessão corta os frames em `mtu - 3` (ou em
+	 * `Quirks.maxFragment`, quando o perfil fixa um), nunca abaixo de 20.
+	 *
+	 * **iOS.** O app não negocia o MTU: o host responde na hora com
+	 * `peripheral.maximumWriteValueLength(for: .withoutResponse) + 3`, que reflete o MTU ATT real do link, e **nunca**
+	 * com o valor de `.withResponse` (512, o limite de uma escrita longa com Prepare/Execute Write, que não depende do
+	 * MTU): com ele a sessão mandaria o BIND de 45 bytes numa escrita só, que firmwares com Nordic UART costumam recusar.
+	 * O tipo de escrita continua `.withResponse`. Com o fitGPS 0.2.1, que negociou MTU 23 no Android, os dois sistemas
+	 * mandam fragmentos de 20 bytes (`docs/decisoes.md`, ADR 5, emenda).
 	 */
 	public fun requestMtu(mtu: Int, requestId: Int)
 

@@ -1,6 +1,7 @@
 package br.com.grupotechnos.watch.protocol.session
 
 import br.com.grupotechnos.watch.protocol.domain.ConnectionState
+import br.com.grupotechnos.watch.protocol.testing.Fixtures
 import br.com.grupotechnos.watch.protocol.testing.Recording
 import br.com.grupotechnos.watch.protocol.testing.RecordingLoader
 import br.com.grupotechnos.watch.protocol.testing.ReplayAction
@@ -13,7 +14,6 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -21,26 +21,36 @@ import kotlin.test.fail
 /**
  * Toda gravação `.jsonl` em qualquer subpasta de `fixtures/real` vira um replay estrito, com as ações deduzidas dos
  * próprios frames ([ReplayScenario]). Basta copiar o arquivo exportado pelo app de exemplo para a pasta
- * (`docs/fixtures.md`); a pasta `fixtures/` é input do Gradle, então a gravação nova roda na próxima execução.
+ * (`docs/fixtures.md`); a pasta `fixtures/` é input de todas as tarefas de teste do Gradle, então a gravação nova roda
+ * na próxima execução.
  *
- * Cada arquivo reproduzido imprime uma linha `REPLAY <caminho>: <n> packets, TX matched <a>/<b>, final state <estado>`
- * no stdout do teste (relatório XML em `protocol/build/test-results/jvmTest/`). É a prova de que a gravação rodou de
- * verdade, e não foi pulada. O mesmo verificador roda na gravação sintética, para garantir que ele próprio funciona.
+ * Está no `commonTest`: roda em `jvmTest`, `testDebugUnitTest`, `testReleaseUnitTest` e `iosSimulatorArm64Test`. Cada
+ * arquivo reproduzido imprime uma linha `REPLAY <caminho>: <n> packets, TX matched <a>/<b>, final state <estado>` no
+ * stdout do teste, que fica no `system-out` do relatório XML de cada tarefa (`protocol/build/test-results/<tarefa>/`).
+ * É a prova de que a gravação rodou de verdade, e não foi pulada, naquele target. O mesmo verificador roda na gravação
+ * sintética, para garantir que ele próprio funciona.
+ *
+ * A listagem de `fixtures/real` tem código próprio em cada target (`java.io.File` na JVM, `NSFileManager` no iOS). Para
+ * uma listagem quebrada não pular todas as gravações em silêncio, a gravação versionada [COMMITTED_REAL_RECORDING] tem de
+ * aparecer nela, senão o teste falha.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class RealFixturesReplayTest {
 	@Test
 	fun everyRealRecordingReplays() = runTest {
-		val root = File(RecordingLoader.fixturesDir(), "real")
-		val files = root.walkTopDown().filter { it.isFile && it.extension == "jsonl" }.sortedBy { it.path }.toList()
-		if (files.isEmpty()) println("RealFixturesReplayTest: no recordings under $root yet")
-		val failures = files.mapNotNull { file -> check(RecordingLoader.load(file)) }
+		val files = Fixtures.jsonlUnder("real")
+		val listed = files.map { Fixtures.relative(it) }
+		assertTrue(
+			COMMITTED_REAL_RECORDING in listed,
+			"listing of ${Fixtures.path("real")} misses $COMMITTED_REAL_RECORDING; found $listed",
+		)
+		val failures = files.mapNotNull { path -> check(RecordingLoader.load(path)) }
 		if (failures.isNotEmpty()) fail(failures.joinToString("\n\n"))
 	}
 
 	@Test
 	fun verifierAcceptsTheSyntheticRecording() = runTest {
-		val recording = RecordingLoader.load(File(RecordingLoader.fixturesDir(), SyntheticFitGpsFixture.RELATIVE_PATH))
+		val recording = RecordingLoader.loadFixture(SyntheticFitGpsFixture.RELATIVE_PATH)
 		val failure = check(recording)
 		assertTrue(failure == null, failure)
 	}
@@ -50,18 +60,18 @@ class RealFixturesReplayTest {
 		val actions = try {
 			ReplayScenario.deduce(recording)
 		} catch (error: IllegalArgumentException) {
-			println("REPLAY ${relativePath(recording)}: not replayed (${error.message})")
+			println("REPLAY ${Fixtures.relative(recording.source)}: not replayed (${error.message})")
 			return "${recording.source}: ${error.message}"
 		}
 		val outcome = runReplay(recording, actions)
 		try {
 			val replay = outcome.replay
 			println(
-				"REPLAY ${relativePath(recording)}: ${recording.packets.size} packets, " +
+				"REPLAY ${Fixtures.relative(recording.source)}: ${recording.packets.size} packets, " +
 					"TX matched ${replay.matchedTx}/${replay.recordedTx}, final state ${outcome.session.state}",
 			)
 			val problems = replay.problems().toMutableList()
-			val expected = if (actions.last() == ReplayAction.Forget) ConnectionState.DISCONNECTED else ConnectionState.READY
+			val expected = expectedFinalState(actions)
 			if (outcome.session.state != expected) problems += "final state ${outcome.session.state}, expected $expected"
 			problems += unfinished(outcome)
 			return if (problems.isEmpty()) null else "${recording.source} (actions $actions):\n" + problems.joinToString("\n")
@@ -70,10 +80,6 @@ class RealFixturesReplayTest {
 			runCurrent()
 		}
 	}
-
-	/** Caminho da gravação relativo a `fixtures/`, como aparece na doc. */
-	private fun relativePath(recording: Recording): String =
-		File(recording.source).relativeToOrSelf(RecordingLoader.fixturesDir()).invariantSeparatorsPath
 
 	private fun unfinished(outcome: ReplayOutcome): List<String> =
 		outcome.requestIds.mapNotNull { (action, id) ->
@@ -85,3 +91,13 @@ class RealFixturesReplayTest {
 			}
 		}
 }
+
+/**
+ * A gravação real versionada (fitGPS 0.2.1), caminho relativo a `fixtures/`. A listagem de `fixtures/real` tem de
+ * encontrá-la em todo target, e o `RealtimeReplayTest` a reproduz no dispatcher de produção.
+ */
+internal const val COMMITTED_REAL_RECORDING: String = "real/fitgps/0.2.1/pair-commands-bt-reconnect-sync.jsonl"
+
+/** Estado em que uma gravação reproduzida termina: `DISCONNECTED` se a última ação é um Forget, senão `READY`. */
+internal fun expectedFinalState(actions: List<ReplayAction>): ConnectionState =
+	if (actions.last() == ReplayAction.Forget) ConnectionState.DISCONNECTED else ConnectionState.READY

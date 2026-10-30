@@ -28,14 +28,20 @@ import kotlin.coroutines.CoroutineContext
  * Todos os métodos retornam imediatamente e podem ser chamados de qualquer thread. O resultado chega pelo
  * [WatchSessionListener], na thread da sessão. Comandos que exigem conexão (`readX`, `setTime`, `refreshSteps`,
  * `syncHistory`) são aceitos em [ConnectionState.READY] e [ConnectionState.SYNCING] e executados um de cada vez,
- * em ordem; em outros estados terminam com `onError(NOT_READY)`.
+ * em ordem; em outros estados terminam com `onError(NOT_READY)`. O [WatchLogger] não fica só na thread da sessão:
+ * [getStepsDays], [getSleepSessions], [confirmUploaded] e os construtores podem chamá-lo na thread de quem chama
+ * (KDoc de [WatchLogger]).
  */
 public class WatchSession internal constructor(
 	transport: Transport,
 	logger: WatchLogger,
 	store: SampleStore,
 	clock: WatchClock,
-	context: CoroutineContext,
+	/**
+	 * Onde a sessão roda; precisa ter paralelismo 1. Fica exposto (internamente) só para o `SessionThreadingTest` conferir
+	 * que o dispatcher dos construtores públicos é serial, coisa que nenhum replay distingue.
+	 */
+	internal val sessionContext: CoroutineContext,
 ) {
 	/** Sessão com relógio e fuso injetados (útil para testes do host). */
 	public constructor(transport: Transport, logger: WatchLogger, store: SampleStore, clock: WatchClock) :
@@ -45,7 +51,7 @@ public class WatchSession internal constructor(
 	public constructor(transport: Transport, logger: WatchLogger, store: SampleStore) :
 		this(transport, logger, store, SystemWatchClock)
 
-	private val engine = SessionEngine(transport, logger, store, clock, context)
+	private val engine = SessionEngine(transport, logger, store, clock, sessionContext)
 
 	/** Entrada dos eventos BLE do host. */
 	public val events: TransportEvents

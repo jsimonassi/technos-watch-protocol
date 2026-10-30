@@ -3,11 +3,18 @@ package br.com.grupotechnos.watch.protocol.session
 import br.com.grupotechnos.watch.protocol.domain.DataKind
 import br.com.grupotechnos.watch.protocol.domain.SleepSession
 import br.com.grupotechnos.watch.protocol.domain.StepsSample
+import br.com.grupotechnos.watch.protocol.log.FrameDirection
 import br.com.grupotechnos.watch.protocol.log.LogLevel
+import br.com.grupotechnos.watch.protocol.log.WatchLogger
 import br.com.grupotechnos.watch.protocol.profile.StepsAggregation
+import br.com.grupotechnos.watch.protocol.testing.FakeTransport
 import br.com.grupotechnos.watch.protocol.testing.SessionTestLogger
 import br.com.grupotechnos.watch.protocol.testing.TestClock
 import br.com.grupotechnos.watch.protocol.util.TimeFormat
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlinx.datetime.LocalDateTime
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -138,5 +145,79 @@ class HistoryStoreTest {
 			),
 		)
 		assertEquals(listOf("2026-10-23"), history.sleepSessions(3).map { it.dayKey })
+	}
+
+	@Test
+	fun aThrowingLoggerNeverEscapesTheHistory() {
+		// O logger do host não deve lançar; se lançar, a carga, a mescla, a poda, a gravação e as consultas continuam.
+		val logger = ThrowingLogger()
+		val store = object : SampleStore by InMemorySampleStore() {
+			override fun loadSleep(): List<SleepSession> = throw IllegalStateException("disk gone")
+
+			override fun saveSleep(sessions: List<SleepSession>) = throw IllegalStateException("disk full")
+		}
+		val history = HistoryStore(store, TestClock.at(NOW_ISO), logger)
+		val afterLoad = logger.calls
+		assertTrue(afterLoad > 0, "the failing load did not log")
+		val tooOld = StepsSample(TimeFormat.fromLocalWallClock(LocalDateTime(2026, 9, 1, 8, 0, 0), zone), 5, 0, 0, 1.0)
+		val farFuture = sample(30, 8, 7)
+		assertEquals(2, history.mergeSteps(listOf(sample(26, 8, 100), sample(28, 8, 200), tooOld, farFuture), retentionDays))
+		val sleepStart = at(27, 6)
+		assertEquals(1, history.mergeSleep(listOf(SleepSession("2026-10-27", sleepStart, sleepStart + 60_000, "", "", emptyList(), 1, 0, 0, 0, 1))))
+		history.confirm(DataKind.STEPS, listOf("not-a-day", "2026-10-25"))
+		assertEquals(setOf("2026-10-25"), history.confirmedDays(DataKind.STEPS))
+		assertEquals(listOf("2026-10-26", "2026-10-28"), history.stepsDays(0, StepsAggregation.HOURLY_SUM).map { it.dayKey })
+		assertEquals(listOf("2026-10-27"), history.sleepSessions(0).map { it.dayKey })
+		history.prune(1)
+		assertEquals(listOf("2026-10-28"), history.stepsDays(0, StepsAggregation.HOURLY_SUM).map { it.dayKey })
+		// Cada caminho acima registrou, e o logger lançou nos seis: a janela da mescla (uma antiga e uma do futuro), a
+		// gravação do sono que falhou, o dia inválido, os dias anteriores à janela (as duas consultas) e a poda dos passos
+		// do dia 26 (o sono do dia 27 fica).
+		assertEquals(6, logger.calls - afterLoad, "log calls after the load")
+	}
+
+	@OptIn(ExperimentalCoroutinesApi::class)
+	@Test
+	fun aThrowingLoggerNeverEscapesTheSynchronousSessionCalls() = runTest {
+		// getStepsDays, getSleepSessions, confirmUploaded e o construtor rodam na thread de quem chama: uma exceção do
+		// logger ali chegaria direto no host (no Android, na thread do TurboModule).
+		val clock = TestClock.at(NOW_ISO)
+		val oldDay = at(20, 10)
+		val store = InMemorySampleStore().apply {
+			saveSteps(listOf(StepsSample(oldDay, 100, 0, 10, 50.0)))
+			saveSleep(listOf(SleepSession("2026-10-20", oldDay, oldDay + 60_000, "", "", emptyList(), 1, 0, 0, 0, 1)))
+		}
+		val failing = object : SampleStore by store {
+			override fun loadConfirmedDays(kind: DataKind): List<String> = throw IllegalStateException("disk gone")
+		}
+		val logger = ThrowingLogger()
+		val transport = FakeTransport()
+		val session = WatchSession(transport, logger, failing, clock, StandardTestDispatcher(testScheduler))
+		transport.events = session.events
+		try {
+			assertTrue(logger.calls > 0, "the failing load did not log")
+			assertEquals(listOf("2026-10-20"), session.getStepsDays(0).map { it.dayKey })
+			assertEquals(listOf("2026-10-20"), session.getSleepSessions(0).map { it.dayKey })
+			session.confirmUploaded(DataKind.STEPS, listOf("not-a-day", "2026-10-20"))
+			assertEquals(emptyList(), session.getStepsDays(0))
+		} finally {
+			session.close()
+			runCurrent()
+		}
+	}
+
+	/** Um logger que lança em toda chamada, contando quantas houve. */
+	private class ThrowingLogger : WatchLogger {
+		var calls = 0
+
+		override fun log(level: LogLevel, tag: String, message: String) {
+			calls++
+			throw IllegalStateException("logger down: $tag")
+		}
+
+		override fun frame(direction: FrameDirection, characteristic: String, value: ByteArray, summary: String) {
+			calls++
+			throw IllegalStateException("logger down: frame")
+		}
 	}
 }

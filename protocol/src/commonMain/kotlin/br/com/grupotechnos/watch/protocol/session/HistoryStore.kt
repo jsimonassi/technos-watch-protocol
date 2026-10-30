@@ -33,6 +33,8 @@ import kotlin.concurrent.atomics.ExperimentalAtomicApi
  * **Persistência.** Cada mudança grava no [SampleStore] na thread da sessão. Falha do store é registrada no log e
  * não interrompe a sincronização: o instantâneo em memória continua valendo até o processo morrer.
  *
+ * **Logger.** Toda chamada ao [WatchLogger] passa por [log], que engole uma exceção do logger, como a `SessionEngine`.
+ *
  * Os instantâneos iniciais são carregados do store no construtor, na thread que cria a `WatchSession`.
  */
 @OptIn(ExperimentalAtomicApi::class)
@@ -123,7 +125,7 @@ internal class HistoryStore(
 	fun confirm(kind: DataKind, dayKeys: List<String>) {
 		val valid = dayKeys.filter { isDayKey(it) }
 		if (valid.size != dayKeys.size) {
-			logger.log(LogLevel.WARN, "Session/confirmUploaded", "ignored invalid day keys: ${dayKeys - valid.toSet()}")
+			log(LogLevel.WARN, "Session/confirmUploaded", "ignored invalid day keys: ${dayKeys - valid.toSet()}")
 		}
 		if (valid.isEmpty()) return
 		update(kind) { it + valid }
@@ -144,13 +146,13 @@ internal class HistoryStore(
 		val tz = clock.timeZoneId()
 		val keptSteps = steps.filter { TimeFormat.dayKey(it.atEpochMillis, tz) >= oldestKept }
 		if (keptSteps.size != steps.size) {
-			logger.log(LogLevel.INFO, "Session/prune", "dropped ${steps.size - keptSteps.size} step samples before $oldestKept")
+			log(LogLevel.INFO, "Session/prune", "dropped ${steps.size - keptSteps.size} step samples before $oldestKept")
 			steps = keptSteps
 			persist("saveSteps") { store.saveSteps(steps) }
 		}
 		val keptSleep = sleep.filter { it.dayKey >= oldestKept }
 		if (keptSleep.size != sleep.size) {
-			logger.log(LogLevel.INFO, "Session/prune", "dropped ${sleep.size - keptSleep.size} sleep sessions before $oldestKept")
+			log(LogLevel.INFO, "Session/prune", "dropped ${sleep.size - keptSleep.size} sleep sessions before $oldestKept")
 			sleep = keptSleep
 			persist("saveSleep") { store.saveSleep(sleep) }
 		}
@@ -230,7 +232,7 @@ internal class HistoryStore(
 		}
 		val toleranceHours = FUTURE_TOLERANCE_MS / 3_600_000
 		if (future + old > 0) {
-			logger.log(
+			log(
 				if (future > 0) LogLevel.WARN else LogLevel.INFO,
 				"Session/mergeSteps",
 				"dropped ${future + old} of ${samples.size} step samples: " +
@@ -238,7 +240,7 @@ internal class HistoryStore(
 			)
 		}
 		if (ahead > 0) {
-			logger.log(
+			log(
 				LogLevel.INFO,
 				"Session/mergeSteps",
 				"kept $ahead step samples after today ($today) within $toleranceHours h of now (watch clock in another time zone?)",
@@ -252,7 +254,7 @@ internal class HistoryStore(
 		val oldest = dayKeyBefore(daysBefore.coerceAtLeast(0))
 		val older = dayKeys.filter { it < oldest }.distinct()
 		if (older.isNotEmpty()) {
-			logger.log(LogLevel.INFO, "Session/$method", "daysBefore=$daysBefore, also returning unconfirmed days $older")
+			log(LogLevel.INFO, "Session/$method", "daysBefore=$daysBefore, also returning unconfirmed days $older")
 		}
 	}
 
@@ -280,11 +282,25 @@ internal class HistoryStore(
 			false
 		}
 
+	/**
+	 * Toda linha de log daqui passa por este método. O logger é do host e não deve lançar, mas se lançar a exceção é
+	 * engolida, como em `SessionEngine.log`: uma falha nele não pode escapar de `getStepsDays`, `getSleepSessions` e
+	 * `confirmUploaded` (que rodam na thread de quem chama), do construtor da `WatchSession` (a carga do store) nem
+	 * interromper uma mescla, a poda ou a gravação no store na thread da sessão.
+	 */
+	private fun log(level: LogLevel, tag: String, message: String) {
+		try {
+			logger.log(level, tag, message)
+		} catch (_: Exception) {
+			// O logger é do host; uma falha nele não pode virar falha da consulta nem do histórico.
+		}
+	}
+
 	private inline fun <T> loadOrEmpty(method: String, load: () -> List<T>): List<T> =
 		try {
 			load()
 		} catch (error: Exception) {
-			logger.log(LogLevel.ERROR, "Session/$method", "store failed, starting empty: ${error.message}")
+			log(LogLevel.ERROR, "Session/$method", "store failed, starting empty: ${error.message}")
 			emptyList()
 		}
 
@@ -292,7 +308,7 @@ internal class HistoryStore(
 		try {
 			save()
 		} catch (error: Exception) {
-			logger.log(LogLevel.ERROR, "Session/$method", "store failed, keeping the in-memory copy: ${error.message}")
+			log(LogLevel.ERROR, "Session/$method", "store failed, keeping the in-memory copy: ${error.message}")
 		}
 	}
 
