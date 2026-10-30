@@ -42,12 +42,13 @@ public data class Battery(
 /**
  * Uma amostra de passos como o relógio entrega, já normalizada para um instante real.
  *
- * No SMA cada amostra representa uma hora cheia (o último registro da hora prevalece).
- * Como somar ou combinar as amostras de um dia é definido por
- * [br.com.grupotechnos.watch.protocol.profile.StepsAggregation].
+ * No SMA cada amostra representa uma hora cheia (o último registro da hora prevalece). No fitGPS com firmware 0.2.1 o
+ * valor é o acumulado do dia até esse registro, não o total da hora (`docs/decisoes.md`, ADR 1).
+ * Como combinar as amostras de um dia é definido por [br.com.grupotechnos.watch.protocol.profile.StepsAggregation].
  *
  * @property atEpochMillis início do intervalo, em milissegundos desde 1970-01-01T00:00Z.
- * @property steps passos do intervalo.
+ * @property steps passos: o total do intervalo ou, num relógio que acumula por dia (fitGPS 0.2.1), o acumulado do dia
+ * na última leitura do intervalo.
  * @property mode código de modo do registro no protocolo da família (no SMA, 0 = registro normal).
  * @property calories calorias estimadas para [steps] (kcal).
  * @property distanceMeters distância estimada para [steps] (metros).

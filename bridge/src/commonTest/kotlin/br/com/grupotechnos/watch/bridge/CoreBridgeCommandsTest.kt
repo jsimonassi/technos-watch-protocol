@@ -104,7 +104,8 @@ class CoreBridgeCommandsTest {
 	@Test
 	fun refreshStepsEmitsTodayBeforeTheResolve() = runBridge { b ->
 		b.pairReady()
-		b.h.sportPages += sportPage(Triple(oct(28, 9), 0, 1_000), Triple(oct(28, 10), 0, 234))
+		// Acumulado do dia, como o fitGPS 0.2.1: o total de hoje é a leitura das 10h (ADR 1 do :protocol).
+		b.h.sportPages += sportPage(Triple(oct(28, 9), 0, 1_000), Triple(oct(28, 10), 0, 1_234))
 		b.bridge.refreshSteps(b.completion("refreshSteps"))
 		b.run()
 		assertEquals(2, b.journal.lines.size, b.journal.lines.joinToString("\n"))

@@ -17,8 +17,10 @@ import kotlinx.datetime.LocalDateTime
  *   `getRawOffset()`, `SMAService.java:420`, errando uma hora durante o horário de verão).
  * - Calorias e distância por amostra com [SmaEstimates] (perfil fixo do Core).
  *
- * O resultado sai ordenado por instante. Como somar as horas de um dia é decisão da sessão
- * (`Quirks.stepsAggregation`, hoje `HOURLY_SUM`, como `SMAService.java:859-866`).
+ * O resultado sai ordenado por instante. Como combinar as horas de um dia é decisão da sessão
+ * (`Quirks.stepsAggregation`). No fitGPS 0.2.1 o `mode 0` é o acumulado do dia e o perfil usa `DAY_CUMULATIVE`
+ * (`docs/decisoes.md`, ADR 1): o relógio entrega os registros do mais antigo para o mais novo e o contador só cresce
+ * durante o dia, então o último da hora é também o maior dela, e o maior das horas é o total do dia.
  */
 internal object SmaStepsMapper {
 	/**

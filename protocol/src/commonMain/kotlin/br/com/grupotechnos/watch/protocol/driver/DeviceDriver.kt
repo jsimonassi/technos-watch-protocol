@@ -52,7 +52,8 @@ internal interface DeviceDriver {
 
 	/**
 	 * Lê todo o histórico de passos disponível, paginando até o fim.
-	 * Retorna amostras já agrupadas como a família define (no SMA: uma por hora, último registro da hora prevalece).
+	 * Retorna amostras já agrupadas como a família define (no SMA: uma por hora, último registro da hora prevalece; no
+	 * fitGPS 0.2.1, com o acumulado do dia).
 	 */
 	suspend fun readSteps(): List<StepsSample>
 

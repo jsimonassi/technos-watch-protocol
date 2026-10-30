@@ -57,6 +57,38 @@ class HistoryStoreTest {
 	}
 
 	@Test
+	fun dayCumulativeFollowsADayAccumulatorAcrossMidnight() {
+		// Como o fitGPS 0.2.1, o contador só cresce durante o dia; recomeçar depois da meia-noite é suposição (T5,
+		// ainda não visto). O dia é a leitura de mais passos, com as estimativas dela; somar as horas contaria o
+		// acumulado de novo a cada hora (ADR 1).
+		val samples = listOf(
+			sample(27, 21, 6900), sample(27, 22, 7010), sample(27, 23, 7040),
+			sample(28, 0, 0), sample(28, 7, 650), sample(28, 8, 1900),
+		)
+		val cumulative = StepsAggregator.byDay(samples, StepsAggregation.DAY_CUMULATIVE, zone)
+		assertEquals(listOf("2026-10-27" to 7040, "2026-10-28" to 1900), cumulative.map { it.dayKey to it.steps })
+		assertEquals(listOf(704, 190), cumulative.map { it.calories })
+		assertEquals(listOf(3520.0, 950.0), cumulative.map { it.distanceMeters })
+		assertEquals(listOf(20950, 2550), StepsAggregator.byDay(samples, StepsAggregation.HOURLY_SUM, zone).map { it.steps })
+	}
+
+	@Test
+	fun todayAndPendingDaysFollowTheGivenAggregation() {
+		// O mesmo histórico com as duas regras: hoje tem duas horas; ontem, uma só, e aí as duas dão o mesmo total.
+		val history = HistoryStore(InMemorySampleStore(), TestClock.at(NOW_ISO), SessionTestLogger())
+		history.mergeSteps(listOf(sample(27, 22, 999), sample(28, 8, 300), sample(28, 9, 450)), retentionDays)
+		assertEquals(450, history.today(StepsAggregation.DAY_CUMULATIVE).steps)
+		assertEquals(750, history.today(StepsAggregation.HOURLY_SUM).steps)
+		assertEquals(listOf(999, 450), history.stepsDays(3, StepsAggregation.DAY_CUMULATIVE).map { it.steps })
+		assertEquals(listOf(999, 750), history.stepsDays(3, StepsAggregation.HOURLY_SUM).map { it.steps })
+		// Uma leitura mais nova da mesma hora (o registro ao vivo do refreshSteps) substitui a anterior.
+		history.mergeSteps(listOf(sample(28, 9, 520)), retentionDays)
+		assertEquals(520, history.today(StepsAggregation.DAY_CUMULATIVE).steps)
+		assertEquals(52, history.today(StepsAggregation.DAY_CUMULATIVE).calories)
+		assertEquals(820, history.today(StepsAggregation.HOURLY_SUM).steps)
+	}
+
+	@Test
 	fun dayKeyFollowsThePhoneTimeZone() {
 		// 2026-10-28 01:00 em São Paulo é 2026-10-28 04:00 UTC, mas 2026-10-27 21:00 em Los Angeles.
 		val samples = listOf(sample(28, 1, 10))

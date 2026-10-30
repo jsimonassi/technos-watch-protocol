@@ -4,6 +4,7 @@ import br.com.grupotechnos.watch.protocol.domain.Battery
 import br.com.grupotechnos.watch.protocol.domain.DataKind
 import br.com.grupotechnos.watch.protocol.domain.DeviceInfo
 import br.com.grupotechnos.watch.protocol.log.FrameDirection
+import br.com.grupotechnos.watch.protocol.profile.StepsAggregation
 import br.com.grupotechnos.watch.protocol.sma.SmaEstimates
 import br.com.grupotechnos.watch.protocol.testing.REPLAY_ADDRESS
 import br.com.grupotechnos.watch.protocol.testing.Recording
@@ -23,7 +24,8 @@ import kotlin.test.assertTrue
 
 /**
  * Critério A2a do plano: a sessão inteira (FakeTransport → SessionEngine → SmaDriver → codec) reproduz a gravação
- * sintética do fitGPS, sem nenhum TX fora do esperado, e chega nos totais de passos calculados à mão.
+ * sintética do fitGPS, sem nenhum TX fora do esperado, e chega nos totais de passos conferidos de forma independente
+ * (`docs/fixtures.md`, seção 5).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class SmaSessionReplayTest {
@@ -85,20 +87,20 @@ class SmaSessionReplayTest {
 				outcome.listener.events.filterIsInstance<SessionEvent.SyncProgress>().map { it.percent },
 			)
 
+			// Perfil do fitGPS (DAY_CUMULATIVE): cada dia é a amostra de mais passos, com as estimativas dela.
 			val days = outcome.session.getStepsDays(3)
-			assertEquals(SyntheticFitGpsFixture.EXPECTED_STEPS.keys.toList(), days.map { it.dayKey })
-			assertEquals(SyntheticFitGpsFixture.EXPECTED_STEPS.values.toList(), days.map { it.steps })
+			val expected = SyntheticFitGpsFixture.EXPECTED_STEPS
+			assertEquals(expected.keys.toList(), days.map { it.dayKey })
+			assertEquals(expected.values.toList(), days.map { it.steps })
 			assertEquals(listOf("2026-10-27T00:00:00-03:00", "2026-10-28T00:00:00-03:00"), days.map { it.startOfDayIso })
-			val hourly = SyntheticFitGpsFixture.EXPECTED_HOURLY_STEPS
+			assertEquals(expected.values.map { SmaEstimates.calories(it) }, days.map { it.calories })
+			assertEquals(expected.values.map { SmaEstimates.distanceMeters(it) }, days.map { it.distanceMeters })
+			assertEquals(SyntheticFitGpsFixture.EXPECTED_HOURLY_STEPS, outcome.store.loadSteps().map { it.steps })
+			// A soma das horas, regra do Core de produção, contaria o acumulado de novo a cada hora (ADR 1).
 			assertEquals(
-				listOf(hourly.take(5), hourly.drop(5)).map { day -> day.sumOf { SmaEstimates.calories(it) } },
-				days.map { it.calories },
+				SyntheticFitGpsFixture.EXPECTED_STEPS_IF_HOURLY_SUM.values.toList(),
+				StepsAggregator.byDay(outcome.store.loadSteps(), StepsAggregation.HOURLY_SUM, recording.header.timeZone).map { it.steps },
 			)
-			assertEquals(
-				listOf(hourly.take(5), hourly.drop(5)).map { day -> day.sumOf { SmaEstimates.distanceMeters(it) } },
-				days.map { it.distanceMeters },
-			)
-			assertEquals(20, outcome.store.loadSteps().size)
 
 			// Sono é exploratório: só confere que a noite gravada vira uma sessão do dia em que a pessoa acordou.
 			val sleep = outcome.session.getSleepSessions(1)

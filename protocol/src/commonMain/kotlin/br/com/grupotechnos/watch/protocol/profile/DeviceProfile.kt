@@ -36,16 +36,21 @@ public enum class BindPayloadKind {
 }
 
 /**
- * Como somar as amostras de passos de um dia.
+ * Como combinar as amostras de passos de um dia num total.
  */
 public enum class StepsAggregation {
 	/**
-	 * Cada amostra é o total de uma hora; o total do dia é a soma das horas.
-	 * É o que o Core atual faz em produção (`SMAService.getHistoryPedometer`).
+	 * Cada amostra é o total de uma hora; o total do dia é a soma das horas, das calorias e da distância.
+	 * É o que os dois Cores atuais fazem em produção com o fitGPS (`SMAService.getHistoryPedometer`), o que conta a
+	 * mais quando o relógio entrega o acumulado do dia (`docs/decisoes.md`, ADR 1). Fica para um relógio cujo contador
+	 * zere a cada hora.
 	 */
 	HOURLY_SUM,
 
-	/** Cada amostra é o acumulado do dia; o total do dia é o maior valor do dia. */
+	/**
+	 * Cada amostra é o acumulado do dia; o total do dia é a amostra de maior número de passos, com as calorias e a
+	 * distância dela. É o do fitGPS com firmware 0.2.1 (`docs/decisoes.md`, ADR 1).
+	 */
 	DAY_CUMULATIVE,
 }
 
@@ -62,7 +67,7 @@ public enum class StepsAggregation {
  * @property postLoginDelayMs espera depois do LOGIN antes dos comandos automáticos (acerto de hora).
  * @property bindPayload formato do payload do BIND/LOGIN.
  * @property bindUserId userId usado quando [bindPayload] é [BindPayloadKind.USER_ID].
- * @property stepsAggregation como somar as amostras de passos de um dia.
+ * @property stepsAggregation como combinar as amostras de passos de um dia num total.
  * @property historyRetentionDays quantos dias de amostras a sessão mantém no `SampleStore`. A poda depois de cada
  * sync usa esta janela, e a mescla de passos já descarta amostras mais velhas que ela ou do futuro (dia depois de
  * hoje e mais de 3 h à frente de agora).

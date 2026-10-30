@@ -29,6 +29,10 @@ public object Profiles {
 	/**
 	 * Mormaii fitGPS. Nome BLE e appName iguais aos do Core atual (`AvailableDevices.java:21`);
 	 * slug igual a `SMART_WATCH_SLUG.fitGPS` do app.
+	 *
+	 * Passos em [StepsAggregation.DAY_CUMULATIVE]: no firmware 0.2.1 o registro `mode 0` é o acumulado do dia, não o
+	 * total da hora (confirmado no relógio em 2026-10-29; `docs/decisoes.md`, ADR 1). O Core de produção soma as horas
+	 * e conta a mais.
 	 */
 	public val MORMAII_FIT_GPS: DeviceProfile = DeviceProfile(
 		id = "fitgps",
@@ -47,7 +51,7 @@ public object Profiles {
 			postLoginDelayMs = 3_000,
 			bindPayload = BindPayloadKind.ANDROID_FF,
 			bindUserId = 1,
-			stepsAggregation = StepsAggregation.HOURLY_SUM,
+			stepsAggregation = StepsAggregation.DAY_CUMULATIVE,
 			historyRetentionDays = 30,
 		),
 	)

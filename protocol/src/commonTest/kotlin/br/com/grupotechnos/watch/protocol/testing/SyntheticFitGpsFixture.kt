@@ -22,9 +22,12 @@ import kotlinx.datetime.LocalDateTime
  * - RX: o ACK do relógio para cada pedido e, nos GETs, a resposta com o L1 de 8 bytes numa notificação própria e o
  *   corpo em pedaços de 20 (`SmaManager.java:506-528`), seq do relógio a partir de `0x0100`.
  *
- * Os números de passos foram escolhidos para exercitar as regras do mapper: duas páginas (a primeira com 20
- * registros, o que força a segunda), horas repetidas em que vale o último registro e um registro de exercício
- * (mode 32) que fica de fora. Os totais esperados estão em [EXPECTED_STEPS] e são conferidos à mão no teste.
+ * Os passos imitam o acumulado do dia do fitGPS 0.2.1 (`docs/decisoes.md`, ADR 1): crescem dentro do dia e recomeçam
+ * depois da meia-noite, o que é suposição (quando o fitGPS zera ainda não foi visto, T5). Os números exercitam as
+ * regras do mapper e da agregação: duas páginas (a primeira com 20 registros, o que força a segunda), horas repetidas em
+ * que vale o último registro (13:59:59 e 14:20; o 14:20 muda o total de 28/10, e os dois mudam a soma das horas) e um
+ * registro de exercício (mode 32, às 14:25) que fica de fora; se entrasse, seria o último da hora 14 e mudaria o total.
+ * Os totais esperados estão em [EXPECTED_STEPS]; a conferência independente está em `docs/fixtures.md`, seção 5.
  */
 internal object SyntheticFitGpsFixture {
 	const val RELATIVE_PATH: String = "synthetic/fitgps-pair-sync.jsonl"
@@ -38,16 +41,34 @@ internal object SyntheticFitGpsFixture {
 		timeZone = "America/Sao_Paulo",
 	)
 
-	/** Total de passos por dia que a gravação deve produzir (ver KDoc do objeto). */
-	val EXPECTED_STEPS: Map<String, Int> = mapOf(
-		// 19h..23h de 27/10: 100 + 110 + 120 + 130 + 140.
-		"2026-10-27" to 600,
-		// 00h..14h de 28/10: 150..290 (soma 3300), com 13h trocada por 500 e 14h trocada por 777 na página 2.
-		"2026-10-28" to 3300 - 280 - 290 + 500 + 777,
+	/**
+	 * Acumulado do dia em cada hora cheia da página 1, mode 0: 27/10 de 19h a 23h e 28/10 de 00h a 14h. Supõe-se que o
+	 * contador recomece do zero depois da meia-noite (T5).
+	 */
+	private val PAGE1_STEPS: List<Int> = listOf(
+		6_120, 6_480, 6_950, 7_010, 7_040,
+		0, 0, 0, 12, 12, 12, 230, 1_180, 2_350, 2_890, 3_020, 3_410, 4_170, 4_400, 4_520,
 	)
 
-	/** Passos de cada hora que sobrevivem ao mapper, para conferir calorias e distância amostra a amostra. */
-	val EXPECTED_HOURLY_STEPS: List<Int> = (0..19).map { 100 + 10 * it }.let { it.dropLast(2) + listOf(500, 777) }
+	/** Passos de cada hora que sobrevivem ao mapper, em ordem: a página 2 troca 13h por 4500 e 14h por 4810. */
+	val EXPECTED_HOURLY_STEPS: List<Int> = PAGE1_STEPS.dropLast(2) + listOf(4_500, 4_810)
+
+	/** Total de passos por dia com o perfil do fitGPS (`DAY_CUMULATIVE`): a amostra de mais passos do dia. */
+	val EXPECTED_STEPS: Map<String, Int> = mapOf(
+		// 19h..23h de 27/10: o acumulado às 23h.
+		"2026-10-27" to 7_040,
+		// 00h..14h de 28/10: o acumulado às 14:20 (página 2), que substituiu o das 14:00.
+		"2026-10-28" to 4_810,
+	)
+
+	/**
+	 * O que a soma das horas (`HOURLY_SUM`, a regra do Core de produção) daria com as mesmas amostras: o acumulado
+	 * contado de novo a cada hora.
+	 */
+	val EXPECTED_STEPS_IF_HOURLY_SUM: Map<String, Int> = mapOf(
+		"2026-10-27" to EXPECTED_HOURLY_STEPS.take(5).sum(),
+		"2026-10-28" to EXPECTED_HOURLY_STEPS.drop(5).sum(),
+	)
 
 	private val write = Profiles.SMA_NUS.write
 	private val notify = Profiles.SMA_NUS.notify
@@ -69,20 +90,28 @@ internal object SyntheticFitGpsFixture {
 		return Recording(header, conversation.packets, "generated")
 	}
 
-	/** 20 registros horários, mode 0: 27/10 19h até 28/10 14h, passos 100, 110, …, 290. */
+	/** 20 registros horários, mode 0: 27/10 19h até 28/10 14h, com os passos de [PAGE1_STEPS]. */
 	private fun sportPage1(): ByteArray {
 		val writer = ByteWriter()
 		val first = SmaLocalTime.toSecondsSince2000(LocalDateTime(2026, 10, 27, 19, 0, 0))
-		repeat(20) { index -> writer.u32(first + index * 3_600L).u8(0).u24(100 + 10 * index) }
+		PAGE1_STEPS.forEachIndexed { index, steps -> writer.u32(first + index * 3_600L).u8(0).u24(steps) }
 		return writer.toByteArray()
 	}
 
-	/** 3 registros: 14:20 (substitui 14h), exercício às 10:15 (ignorado) e 13:59:59 (substitui 13h). */
+	/**
+	 * 3 registros, do mais antigo para o mais novo dentro da página: 13:59:59 com 4500 (substitui 13h), 14:20 com 4810
+	 * (substitui 14h) e o início de um exercício às 14:25 (mode 32, ignorado) com o acumulado de então, 4830.
+	 *
+	 * Entre as páginas a ordem não é cronológica, de propósito (já era assim antes da regeneração): o 13:59:59
+	 * chega depois do 14:00:00 da página 1, ordem que a gravação real não mostrou (o fitGPS 0.2.1 entregou do mais
+	 * antigo para o mais novo). Assim uma hora já passada (13h) ainda é trocada por um registro que chega depois de
+	 * uma hora mais nova (14h); o último de cada hora continua sendo o maior dela.
+	 */
 	private fun sportPage2(): ByteArray =
 		ByteWriter()
-			.u32(SmaLocalTime.toSecondsSince2000(LocalDateTime(2026, 10, 28, 14, 20, 0))).u8(0).u24(777)
-			.u32(SmaLocalTime.toSecondsSince2000(LocalDateTime(2026, 10, 28, 10, 15, 0))).u8(32).u24(5_000)
-			.u32(SmaLocalTime.toSecondsSince2000(LocalDateTime(2026, 10, 28, 13, 59, 59))).u8(0).u24(500)
+			.u32(SmaLocalTime.toSecondsSince2000(LocalDateTime(2026, 10, 28, 13, 59, 59))).u8(0).u24(4_500)
+			.u32(SmaLocalTime.toSecondsSince2000(LocalDateTime(2026, 10, 28, 14, 20, 0))).u8(0).u24(4_810)
+			.u32(SmaLocalTime.toSecondsSince2000(LocalDateTime(2026, 10, 28, 14, 25, 0))).u8(32).u24(4_830)
 			.toByteArray()
 
 	/** Uma noite: dormiu 23:00, leve, profundo à 01:00, leve às 03:00, acordou 06:30. */

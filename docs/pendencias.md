@@ -16,7 +16,7 @@ As pendências do host Android e da integração com o app Mormaii (o watchdog d
 - [ ] **HCI snoop** ligado (`fixtures.md`, seção 3.2). Ele mostra o intervalo de conexão e as propriedades da characteristic em todos os blocos, o que o log do app não mostra.
 - [ ] Perguntar a quem fez a primeira gravação:
   - se o relógio pediu para tocar em algo na tela no primeiro BIND (fecha H7 para a gravação de 2026-10-29);
-  - quantos passos a tela mostrava por volta de 08:31 (pela gravação, eram 56; `sma-dados.md`, seção 6);
+  - quantos passos a tela mostrava: **respondido** em 2026-10-29. À noite a tela mostrava 56 passos no dia, com o relógio parado desde a manhã, o mesmo valor das duas gravações; isso fechou o H3 (`decisoes.md`, ADR 1);
   - se o relógio já tinha sido usado antes (explicaria os 1262 registros de sono de 2023-08 a 2024-11).
 - Regras da sessão:
   - **Export antes de cada Clear**: o Clear apaga o anel de log e o recorder. Os exports são cumulativos; versione só o último de cada cenário (`fixtures.md`, seção 3.1). Os `logs-*.jsonl` têm o MAC e nunca entram no repositório.
@@ -51,13 +51,14 @@ O `03/05` pode limpar o histórico do relógio e misturar o resultado, por isso 
 - [ ] **Set time com a hora do celular adiantada 5 min**, conferir a tela do relógio, depois voltar à hora automática (A5). Na gravação de 2026-10-29 o Set time do usuário (`atMs` 778427) mandou a mesma hora que o acerto automático já tinha posto, então a tela não mudou.
 - [ ] Share e Export (A8). Fixture limpa `pair-basics.jsonl`.
 
-### 3. Virada de hora andando (H3, A6, T1)
+### 3. Virada de hora andando (como a hora fecha, A6, T1)
 
 - [ ] Seguir o roteiro T1: ler e fotografar a tela em hh:40, hh:53, hh+1:03 e hh+1:08; andar sem ler entre hh:56 e hh:59 (o que também serve para ver se chega algum `02/70` espontâneo). No fim, Sync e depois **Passos** (`getHistoryPedometer`). Export.
-  - **Fecha H3**: se o valor `mode 0` cai depois de hh:00, é o total da hora e o `HOURLY_SUM` está certo; se continua crescendo, é o acumulado do dia, e o perfil passa a `DAY_CUMULATIVE` (`decisoes.md`, ADR 1). Também mostra como a hora fecha (registro em hh:00:00 ou em hh:59:xx).
+  - **O H3 já foi respondido** (2026-10-29, sem esta rodada): o `mode 0` do firmware 0.2.1 é o acumulado do dia, e o perfil passou a `DAY_CUMULATIVE` (`decisoes.md`, ADR 1). A prova veio com o relógio parado: o registro ao vivo da noite (`atMs` 29133 e 38440 de `pair-commands-sync-bt-reconnect-disconnect-reconnect.jsonl`) ainda tinha os 56 passos da manhã, e a tela mostrava 56 (`protocolo-sma.md`, seção 8).
+  - Esta rodada fica para: **como a hora fecha** (registro em hh:00:00 ou em hh:59:xx, e se os de hh:00 e hh:30 são instantâneos gravados pelo relógio sozinho) e a confirmação com passos de que o valor segue crescendo ao cruzar a hora. Se ele cair depois de hh:00, a ADR 1 volta a ser discutida.
   - Fecha **A6**: total do dia no app igual ao da tela.
-  - Registrar em: linha H3 da seção 8 de `protocolo-sma.md`; ADR 1; `sma-dados.md`, seções 2 e 6; fixture `steps-hour-boundary.jsonl`.
-- [ ] **Conferência indireta do H3, sem relógio**: comparar no backend (`/Users/joao.farias/smartBackend`) a distribuição de passos diários do fitGPS com a dos outros modelos. Se o relógio acumulasse por dia, a soma das horas que a produção faz (`SMAService.java:437-448, 859-866`; `SMAService.m:1277-1288`) inflaria o total de 5 a 14 vezes, e isso apareceria ali. Registrar no contexto da ADR 1.
+  - Registrar em: `sma-dados.md`, seções 2 e 6; ADR 1 só se contradizer o acumulado do dia; fixture `steps-hour-boundary.jsonl`.
+- [ ] **Impacto na produção, sem relógio**: o relógio acumula por dia, e a produção soma um instantâneo por hora com registro (`SMAService.java:437-448, 859-866`; `SMAService.m:1277-1288, 334-342`), então os passos diários do fitGPS no backend provavelmente estão inflados. Comparar no backend (`/Users/joao.farias/smartBackend`) a distribuição de passos diários do fitGPS com a dos outros modelos. É o achado da seção 5 do `docs/pendencias.md` do Repo 2. Registrar na "Consequência para a produção" da ADR 1.
 
 ### 4. Robustez do link
 
@@ -84,6 +85,10 @@ Precisa de um iPhone com o app Mormaii de produção, que faz BIND e LOGIN com U
 - [ ] Mudar o telefone para `America/Manaus`, reconectar, ver o `setTime` e procurar registros `mode 16` e registros reenviados. Fecha o gatilho da ADR 16 (item técnico 3).
 - [ ] Janela da mescla: com o relógio conectado, trocar o telefone para `America/Manaus` entre 23:00 e 23:59 e fazer **Refresh steps** antes de reconectar. O log deve trazer o INFO `Session/mergeSteps` `kept … within 3 h of now`, nenhum `dropped … after today`, e os passos devem aparecer no dia seguinte. Fecha a emenda da ADR 16 (item técnico 3).
 
+### Opcional: contador zerado no meio do dia
+
+- [ ] Com passos no dia, Refresh steps; reiniciar o relógio (ou deixar a bateria acabar e carregar), reconectar, andar um pouco, Refresh steps e **Passos**, comparando o total do app com a tela. Se a tela recomeçar do zero, o app mostra o pico de antes até a contagem nova passá-lo, e depois perde os passos de antes do zero (`decisoes.md`, ADR 1, "O que continua aberto"). Registrar na ADR 1 e em `sma-dados.md`, seções 6 e 7; fixture `steps-midday-reset.jsonl`.
+
 ## Noites (sono, não prioritário)
 
 - [ ] **Noite real (T3)**: Sync na hora de dormir, dormir com o relógio, anotar os horários de deitar e levantar. De manhã: Sync, depois **Sono** (`getHistorySleep`), Export.
@@ -92,7 +97,9 @@ Precisa de um iPhone com o app Mormaii de produção, que faz BIND e LOGIN com U
 - [ ] **Relógio parado na mesa (T4)**: relógio sobre a mesa desde as 13:00, Sync de manhã.
   - Confirma se o padrão da gravação de 2026-10-29 (um START repetido com ENDs de 2 em 2 min) é artefato de relógio parado, o que decide o filtro de plausibilidade (item técnico 4). Registrar em `sma-dados.md`, seção 6.
 
-Ficam para depois: a virada da meia-noite (T5) e os estados de atividade (T7).
+Ficam para depois: a virada da meia-noite (T5) e os estados de atividade (T7). A T5 também decide quando e como o acumulado do dia zera, com uma conferência explícita:
+
+- [ ] **T5: existe registro em 00:00:00 (ou registro ao vivo logo depois da meia-noite) com o total de ontem?** Refresh steps perto de 23:55 (o fechamento de ontem), nenhuma leitura até de manhã, Sync de manhã e Export; numa segunda noite, Refresh steps às 00:01. Procurar, nos registros `mode 0` da hora 00, um valor igual ao fechamento de ontem, e anotar quando a tela zera. Se existir, com `DAY_CUMULATIVE` o dia de hoje mostra o total de ontem até a contagem de hoje passá-lo, e só outro registro da hora 00 o corrige (`decisoes.md`, ADR 1, "O que continua aberto"). Registrar na ADR 1 e em `sma-dados.md`, seções 2 e 6, e decidir a mitigação (por exemplo, pôr o registro de hh:00:00 exato na hora anterior); fixture `steps-midnight.jsonl`.
 
 ## Itens técnicos abertos
 
@@ -106,14 +113,15 @@ O `syncHistory` da gravação real levou 59,3 s, quase todo nas 64 páginas de s
 - Não parar a paginação em páginas antigas: o relógio entrega da mais antiga para a mais nova, então isso nunca chegaria às noites recentes.
 - Sem histórico de sono no relógio, o Sync completo levou 1,2 s (log, ts 1793320666818 a 1793320668031, gravação de 2026-10-29 21:37). Os 59 s aparecem quando há muitas páginas antigas para ler, como no primeiro sync de um relógio usado ou depois de várias noites sem sync.
 
-### 2. Risco do `HOURLY_SUM`
+### 2. Risco do `HOURLY_SUM` (resolvido)
 
-- [ ] Se o H3 mostrar acumulado do dia, o `HOURLY_SUM` conta de 5 a 14 vezes a mais. A produção usa a mesma soma (`SMAService.java:437-448, 859-866`; `SMAService.m:1277-1288`), o que é um indício fraco de que o valor é por hora. Fecha com o bloco 3 e a conferência no backend. Registrar na ADR 1 e na linha H3.
-  - **Indício novo (2026-10-29 21:37)**: o registro ao vivo do `05/42` da noite (`atMs` 29133 e 38440 de `pair-commands-sync-bt-reconnect-disconnect-reconnect.jsonl`) traz `mode 0` com 56 passos, o mesmo valor do último registro da manhã (08:31, primeira gravação), 13 h depois. Se o relógio ficou parado o dia todo, 56 é o acumulado do dia, e o `HOURLY_SUM` somaria 56 + 56 = 112 para o dia. Se ele andou com alguém, é coincidência. Falta essa resposta; o bloco 3 fecha de qualquer jeito.
+- [x] **Resolvido em 2026-10-29 pela troca do perfil do fitGPS para `DAY_CUMULATIVE`** (`decisoes.md`, ADR 1). O H3 mostrou que o `mode 0` é o acumulado do dia: o registro ao vivo do `05/42` da noite (`atMs` 29133 e 38440 de `pair-commands-sync-bt-reconnect-disconnect-reconnect.jsonl`, 21:37:37 e 21:37:47) traz `mode 0` com 56 passos, o mesmo valor do último registro da manhã (08:31:22, `atMs` 1032178 de `pair-commands-bt-reconnect-sync.jsonl`), e o usuário confirmou que o relógio ficou parado o dia todo e que a tela mostrava 56 passos no dia. Com as duas gravações no mesmo histórico, `HOURLY_SUM` daria 56 + 56 = 112 para o dia; `DAY_CUMULATIVE` dá 56 (`RealFixturesStepsTest`, nos quatro targets).
+  - **Achado sobre a produção**: os dois Cores de produção usam a mesma soma (`SMAService.java:437-448, 859-866`; `SMAService.m:1277-1288, 334-342`). Ela não era um indício de que o valor fosse por hora: soma instantâneos horários de um acumulado do dia, e com registros em N horas o total chega a até N vezes o real (N quando todos os passos vêm antes da primeira hora com registro, como em 2026-10-29; cerca de (N+1)/2 com os passos espalhados por igual entre as horas com registro). Os passos do fitGPS que o app de produção manda ao backend provavelmente estão inflados (`docs/pendencias.md` do Repo 2, seção 5; conferência no backend no bloco 3).
 
 ### 3. ADR 16 (deduplicação pelo instante)
 
-- [ ] A chave da mescla de passos é o instante convertido com o fuso do telefone. Se o fuso mudar entre dois syncs e o relógio reenviar registros já lidos (H1 falsa), a mesma hora conta duas vezes. Gatilho para reverter: uma fixture que mostre registros reenviados depois do ACK, como a do T6. Registrar na ADR 16.
+- [ ] A chave da mescla de passos é o instante convertido com o fuso do telefone. Se o fuso mudar entre dois syncs e o relógio reenviar registros já lidos (H1 falsa), a mesma hora vira duas amostras: com `HOURLY_SUM` ela contaria duas vezes; com `DAY_CUMULATIVE`, o padrão do fitGPS, não soma, mas pode cair no dia vizinho. Gatilho para reverter: uma fixture que mostre registros reenviados depois do ACK, como a do T6. Registrar na ADR 16.
+- [ ] Com `DAY_CUMULATIVE`, o dia de cada amostra é calculado no fuso do telefone na hora da consulta. Com o telefone indo para leste depois da leitura, a última hora de um dia ainda não confirmado, com o acumulado do dia inteiro, cai no dia seguinte e vira o maior valor dele (com `HOURLY_SUM`, só os passos daquela hora mudariam de dia). Fecha com o T6; corrigir exige guardar o dia do relógio na amostra, o que muda o contrato do `SampleStore` e o host. Registrar na ADR 1 ("O que continua aberto").
 - [ ] A janela da mescla descarta amostras de amanhã com mais de 3 h à frente de agora. Com o relógio num fuso mais de 3 h à frente do telefone (viagem internacional, sync antes do acerto de hora da conexão), os passos mais novos perto da meia-noite saem e, se H2 valer, se perdem; até 3 h (todos os fusos do Brasil) eles ficam. Fecha com o T6; se o caso internacional importar, aumentar a folga ou guardar as amostras do futuro até o sync seguinte. Registrar na emenda da ADR 16.
 
 ### 4. Filtro de plausibilidade do sono

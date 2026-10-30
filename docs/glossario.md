@@ -49,9 +49,9 @@ Termos usados no código, nos KDocs e nos outros documentos. Quando o termo tem 
 | **mode** | Byte de tipo de cada registro de histórico. Nos passos só `mode 0` vira amostra; no sono, 1/2/3 são profundo/leve/acordado e 17/34 início/fim (`sma-dados.md`). |
 | **Página / paginação** | Uma resposta de histórico traz até 20 registros; com exatamente 20, o telefone pede a mesma key de novo para receber o lote seguinte. |
 | **Cursor** | Posição do relógio no próprio histórico. A hipótese H1 é que ele avança quando o relógio recebe o nosso ACK de uma página, e H2 que os registros lidos são apagados; por isso a sessão guarda tudo no `SampleStore`. |
-| **Registro ao vivo** | O último registro de cada resposta `05/42` do fitGPS 0.2.1, carimbado no segundo do pedido, com o total acumulado da hora até ali (`sma-dados.md`, seção 6). É o que faz toda leitura de passos trazer pelo menos um registro. |
+| **Registro ao vivo** | O último registro de cada resposta `05/42` do fitGPS 0.2.1, carimbado no segundo do pedido, com o acumulado do dia até ali (`sma-dados.md`, seção 6). É o que faz toda leitura de passos trazer pelo menos um registro. |
 | **Vetor dourado** | Frame de referência em hex, conferido de forma independente, que o codec tem que gerar byte a byte (`SmaFrameGoldenTest`, `protocolo-sma.md`, seção 9). |
-| **H1–H9** | Hipóteses sobre o relógio, com o default adotado, a situação depois da gravação real do fitGPS 0.2.1 (H5 provada, H6 refutada, H4 com o formato provado, H1 parcial, as outras abertas ou só sugeridas) e como fechar o que falta (`protocolo-sma.md`, seção 8; `pendencias.md`). |
+| **H1–H9** | Hipóteses sobre o relógio, com o default adotado, a situação depois das gravações reais do fitGPS 0.2.1 (H5 provada, H3 e H6 refutadas, H4 com o formato provado, H1 parcial, as outras abertas ou só sugeridas) e como fechar o que falta (`protocolo-sma.md`, seção 8; `pendencias.md`). |
 
 ## Sessão e dados
 
@@ -74,8 +74,9 @@ Termos usados no código, nos KDocs e nos outros documentos. Quando o termo tem 
 | **Ponte de bytes** | O pacote `ios/`, só no `iosMain`: `value.toData()` (`KotlinByteArray` → `Data`), `ByteBridgeKt.toByteArray(data)` e as sobrecargas `onNotification(characteristic:data:)` e `onReadCompleted(requestId:data:status:)`, que copiam os bytes (`arquitetura.md`, seção 11). |
 | **Sync** | `syncHistory`: lê o histórico de passos (e de sono, se pedido) do relógio e grava no `SampleStore`, com progresso de 0 a 100 (0, 50 e 100 quando lê passos e sono). |
 | **SampleStore** | Persistência do histórico que o host implementa (no Core RN, arquivos JSON). A sessão grava tudo o que lê e responde as consultas só a partir dele. |
-| **StepsSample** | Uma amostra de passos (no SMA, o total de uma hora), com calorias e distância estimadas. |
-| **StepsDay** | O total de um dia local, agregado das amostras segundo `Quirks.stepsAggregation` (`HOURLY_SUM` soma as horas; `DAY_CUMULATIVE` usa o maior valor do dia). |
+| **StepsSample** | Uma amostra de passos (no SMA, uma por hora cheia, a do último registro da hora; no fitGPS 0.2.1 o valor é o acumulado do dia), com calorias e distância estimadas. |
+| **StepsDay** | O total de um dia local, agregado das amostras segundo `Quirks.stepsAggregation` (`DAY_CUMULATIVE`, o do fitGPS, usa o maior valor do dia; `HOURLY_SUM` soma as horas). |
+| **Acumulado do dia** | O contador de passos do fitGPS 0.2.1: o `mode 0` de cada registro é o total do dia até aquele registro e não zera na virada da hora (hipótese H3 refutada; `decisoes.md`, ADR 1). Quando ele zera (meia-noite, T5) ainda não foi visto. Somar as horas, como o Core de produção, conta esse total de novo a cada hora com registro. |
 | **dayKey** | Dia local no fuso do telefone, no formato `yyyy-MM-dd`. É a chave de `StepsDay`, de `SleepSession` (o dia em que a pessoa acordou) e de `confirmUploaded`. |
 | **confirmUploaded** | Marca `dayKeys` como já enviados ao backend; esses dias deixam de sair em `getStepsDays`/`getSleepSessions`. É o que o `deletedSavedData` do JavaScript alimenta. |
 | **Retenção** | `Quirks.historyRetentionDays` (30 no fitGPS): depois de cada sync, o que for mais velho sai do store. A mescla de passos também usa essa janela e descarta amostras mais velhas ou do futuro (dia depois de hoje e mais de 3 h à frente de agora; a folga é para o relógio ainda em outro fuso, ADR 16). |
@@ -97,7 +98,7 @@ Termos usados no código, nos KDocs e nos outros documentos. Quando o termo tem 
 | **FrameJsonl** | O formatador do `.jsonl` (cabeçalho + uma linha por pacote), o mesmo no host e nos testes. |
 | **FakeTransport** | Host falso, síncrono e controlável, usado por todos os testes de sessão. Segue o contrato B no Bluetooth desligado. |
 | **Export cumulativo** | Cada **Export** do app de exemplo contém tudo desde o último **Clear**, então um export é prefixo exato do seguinte. Só o último vira fixture (`fixtures.md`, seção 3.1). |
-| **Linha `REPLAY`** | A linha que o `RealFixturesReplayTest` imprime por arquivo reproduzido (caminho, pacotes, TX conferidos, estado final), no `system-out` do XML de cada tarefa de teste. É a prova de que a gravação rodou naquele target. |
+| **Linha `REPLAY`** | A linha que o `RealFixturesReplayTest` imprime por arquivo reproduzido (caminho, pacotes, TX conferidos, estado final), no `system-out` do XML de cada tarefa de teste. É a prova de que a gravação rodou naquele target. O `RealFixturesStepsTest` imprime, do mesmo jeito, uma linha `STEPS-DAY` com o total do dia que as gravações reais produzem. |
 | **`SIMCTL_CHILD_`** | Prefixo das variáveis de ambiente que o `xcrun simctl spawn` repassa ao processo no simulador, sem o prefixo. É como o caminho de `fixtures/` chega ao `iosSimulatorArm64Test` (`SIMCTL_CHILD_FIXTURES_DIR` → `FIXTURES_DIR`). |
 | **`SmaDriver/frame`** | Linha de log em DEBUG, uma por frame de dados completo, em cada sentido: `TX seq=… cmd/key NOME len=…` e `RX seq=… cmd/key NOME len=… crc=ok` (`log/README.md`). |
 | **Pendências** | A validação no relógio que ficou para depois e os itens técnicos abertos, em `docs/pendencias.md`. |

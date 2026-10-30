@@ -6,17 +6,20 @@ import br.com.grupotechnos.watch.protocol.profile.StepsAggregation
 import br.com.grupotechnos.watch.protocol.util.TimeFormat
 
 /**
- * Soma as amostras de passos por dia local, segundo a [StepsAggregation] do perfil.
+ * Combina as amostras de passos por dia local, segundo a [StepsAggregation] do perfil.
  *
  * - [StepsAggregation.HOURLY_SUM]: cada amostra é o total de uma hora; o dia é a soma de passos, calorias e
- *   distância. É o que o Core Android faz em produção (`SMAService.java:859-866`) e o padrão do fitGPS
- *   (`docs/decisoes.md`, ADR 1).
+ *   distância. É o que os dois Cores fazem em produção (`SMAService.java:859-866`; `SMAService.m:334-342`).
  * - [StepsAggregation.DAY_CUMULATIVE]: cada amostra é o acumulado do dia; o dia é a amostra de **maior** número de
- *   passos, com as calorias e a distância dela. Não se usa a última amostra porque um relógio cumulativo que zera à
- *   meia-noite no fuso dele, e não no do telefone, deixaria a última hora do dia com um valor pequeno.
+ *   passos, com as calorias e a distância dela. É o padrão do fitGPS (firmware 0.2.1; `docs/decisoes.md`, ADR 1). Com
+ *   um contador que só cresce durante o dia, o maior valor é a leitura mais nova do dia. Não se usa a última amostra
+ *   porque um relógio cumulativo que zera à meia-noite no fuso dele, e não no do telefone, deixaria a última hora do
+ *   dia com um valor pequeno.
  *
  * O dia de cada amostra é `TimeFormat.dayKey(atEpochMillis, timeZoneId)`: o fuso do telefone **na hora da consulta**.
- * Se o telefone mudar de fuso, os dias são recalculados na próxima consulta; o `SampleStore` guarda só instantes.
+ * Se o telefone mudar de fuso, os dias são recalculados na próxima consulta; o `SampleStore` guarda só instantes. Com
+ * [StepsAggregation.DAY_CUMULATIVE] isso pode levar a última hora de um dia ainda não confirmado, com o acumulado do dia
+ * inteiro, para o dia seguinte (telefone que foi para leste); é um limite aberto da ADR 1.
  */
 internal object StepsAggregator {
 	/** Um [StepsDay] por dia com amostra, em ordem crescente de dia. */

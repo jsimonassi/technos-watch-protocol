@@ -223,6 +223,8 @@ private const val ACTION_BUDGET_MS: Long = 120_000
  *
  * Não fecha a sessão: o teste confere o que quiser e chama `outcome.session.close()`.
  *
+ * @param store histórico com que a sessão começa; o padrão é vazio. Passar o store de outro replay continua o histórico
+ * de uma gravação anterior do mesmo relógio (os totais do dia com duas gravações, `RealFixturesStepsTest`).
  * @param configure ajuste do [FakeTransport] antes da primeira ação (o teste do iOS entrega os RX pela sobrecarga com
  * `NSData`).
  */
@@ -231,6 +233,7 @@ internal fun TestScope.runReplay(
 	recording: Recording,
 	actions: List<ReplayAction> = ReplayScenario.deduce(recording),
 	strict: Boolean = true,
+	store: InMemorySampleStore = InMemorySampleStore(),
 	configure: (FakeTransport) -> Unit = {},
 ): ReplayOutcome {
 	val transport = FakeTransport()
@@ -239,7 +242,6 @@ internal fun TestScope.runReplay(
 	val replay = ReplayDriver(recording, transport, strict)
 	val listener = RecordingListener()
 	val logger = SessionTestLogger()
-	val store = InMemorySampleStore()
 	val clock = TestClock(recording.header.recordedAtEpochMillis, recording.header.timeZone)
 	val session = WatchSession(transport, logger, store, clock, StandardTestDispatcher(testScheduler))
 	transport.events = session.events

@@ -117,8 +117,9 @@ class WatchSessionCommandsTest {
 	}
 
 	@Test
-	fun refreshStepsSumsTheHoursOfToday() = runSession { h ->
+	fun refreshStepsReportsTheDayAccumulatorOfToday() = runSession { h ->
 		h.pairReady()
+		// O fitGPS 0.2.1 grava o acumulado do dia (ADR 1): os valores de hoje só crescem.
 		h.sportPages += sportPage(
 			Triple(oct(27, 22), 0, 999),
 			Triple(oct(28, 8), 0, 300),
@@ -129,14 +130,15 @@ class WatchSessionCommandsTest {
 		h.session.refreshSteps(2)
 		h.run()
 		val live = h.listener.terminal(2) as SessionEvent.LiveSteps
-		// 09:10 e 09:50 caem na mesma hora: vale o último (450). Mode 32 fica de fora. Ontem não entra.
-		assertEquals(750, live.today.steps)
+		// 09:10 e 09:50 caem na mesma hora: vale o último (450), que é também o maior do dia; o perfil do fitGPS não soma
+		// as horas (daria 750). Mode 32 fica de fora (senão seria o maior). Ontem não entra.
+		assertEquals(450, live.today.steps)
 		assertEquals("2026-10-28", live.today.dayKey)
 		assertEquals("2026-10-28T00:00:00-03:00", live.today.startOfDayIso)
-		assertEquals(SmaEstimates.calories(300) + SmaEstimates.calories(450), live.today.calories)
-		assertEquals(SmaEstimates.distanceMeters(300) + SmaEstimates.distanceMeters(450), live.today.distanceMeters)
+		assertEquals(SmaEstimates.calories(450), live.today.calories)
+		assertEquals(SmaEstimates.distanceMeters(450), live.today.distanceMeters)
 		assertEquals(listOf("2026-10-27", "2026-10-28"), h.session.getStepsDays(1).map { it.dayKey })
-		assertEquals(listOf(999, 750), h.session.getStepsDays(1).map { it.steps })
+		assertEquals(listOf(999, 450), h.session.getStepsDays(1).map { it.steps })
 		h.session.close()
 	}
 
@@ -169,22 +171,26 @@ class WatchSessionCommandsTest {
 		return runSession(clock = TestClock.at("2026-10-28T23:30:00-04:00", manaus)) { h ->
 			h.pairReady()
 			h.sportPages += sportPage(
+				// O acumulado do dia 28 às 23:50 do relógio (vira 28 23:00 em Manaus) e o de 00:30, supondo que o contador
+				// zere na meia-noite do relógio (T5, ainda não visto).
+				Triple(oct(28, 23, 50), 0, 8_000),
 				Triple(oct(29, 0, 30), 0, 120),
 				// 03:30 do relógio vira 29 03:00 em Manaus, 3,5 h à frente: acima da folga, é data errada.
 				Triple(oct(29, 3, 30), 0, 900),
 			)
 			h.session.refreshSteps(2)
 			h.run()
-			assertEquals(0, (h.listener.terminal(2) as SessionEvent.LiveSteps).today.steps)
+			// O registro de amanhã que entrou pela folga não entra no maior valor de hoje.
+			assertEquals(8_000, (h.listener.terminal(2) as SessionEvent.LiveSteps).today.steps)
 			assertEquals(
-				listOf(TimeFormat.fromLocalWallClock(oct(29, 0), manaus)),
+				listOf(TimeFormat.fromLocalWallClock(oct(28, 23), manaus), TimeFormat.fromLocalWallClock(oct(29, 0), manaus)),
 				h.store.loadSteps().map { it.atEpochMillis },
 			)
-			assertTrue(h.logger.contains("dropped 1 of 2 step samples: 1 after today (2026-10-28) and more than 3 h ahead"))
+			assertTrue(h.logger.contains("dropped 1 of 3 step samples: 1 after today (2026-10-28) and more than 3 h ahead"))
 			assertTrue(h.logger.contains("kept 1 step samples after today (2026-10-28) within 3 h of now"))
-			// No dia seguinte, os passos aparecem no dia 29.
+			// No dia seguinte, os passos aparecem no dia 29, e o acumulado do dia 28 não vaza para ele.
 			h.clock.nowEpochMillis = TimeFormat.fromLocalWallClock(oct(29, 12), manaus)
-			assertEquals(listOf("2026-10-29" to 120), h.session.getStepsDays(3).map { it.dayKey to it.steps })
+			assertEquals(listOf("2026-10-28" to 8_000, "2026-10-29" to 120), h.session.getStepsDays(3).map { it.dayKey to it.steps })
 			h.session.close()
 		}
 	}
@@ -192,7 +198,7 @@ class WatchSessionCommandsTest {
 	@Test
 	fun syncReportsProgressMergesAndReturnsToReady() = runSession { h ->
 		h.pairReady()
-		h.sportPages += sportPage(Triple(oct(28, 8), 0, 300), Triple(oct(28, 9), 0, 100))
+		h.sportPages += sportPage(Triple(oct(28, 8), 0, 100), Triple(oct(28, 9), 0, 300))
 		h.sleepPages += sleepPage(
 			oct(27, 23) to SmaSleepMode.START,
 			oct(28, 1) to SmaSleepMode.DEEP,
@@ -216,20 +222,21 @@ class WatchSessionCommandsTest {
 		)
 		assertEquals(listOf("05/41", "05/45"), h.watch.receivedLabels().filter { it.startsWith("05/") })
 		assertEquals(listOf(at(oct(28, 8)), at(oct(28, 9))), h.store.loadSteps().map { it.atEpochMillis })
-		assertEquals(400, h.session.getStepsDays(0).single().steps)
+		// Acumulado do dia (perfil do fitGPS): o maior valor, não a soma das horas.
+		assertEquals(300, h.session.getStepsDays(0).single().steps)
 		val sleep = h.session.getSleepSessions(1)
 		assertEquals(1, sleep.size)
 		assertEquals("2026-10-28", sleep.single().dayKey)
 		assertEquals(sleep, h.store.loadSleep())
 
 		// Segunda leitura: a hora 09 mudou e a 10 é nova; a 08 não voltou e continua no store.
-		h.sportPages += sportPage(Triple(oct(28, 9), 0, 250), Triple(oct(28, 10), 0, 50))
+		h.sportPages += sportPage(Triple(oct(28, 9), 0, 350), Triple(oct(28, 10), 0, 420))
 		h.session.syncHistory(3, listOf(DataKind.STEPS))
 		h.run()
 		assertTrue(h.listener.events.contains(SessionEvent.SyncProgress(3, 100)))
 		assertEquals(SessionEvent.SyncFinished(3), h.listener.terminal(3))
-		assertEquals(listOf(300, 250, 50), h.store.loadSteps().map { it.steps })
-		assertEquals(600, h.session.getStepsDays(0).single().steps)
+		assertEquals(listOf(100, 350, 420), h.store.loadSteps().map { it.steps })
+		assertEquals(420, h.session.getStepsDays(0).single().steps)
 		h.session.close()
 	}
 
