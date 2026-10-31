@@ -1,5 +1,6 @@
 package br.com.grupotechnos.watch.protocol.testing
 
+import br.com.grupotechnos.watch.protocol.crp.CrpGatt
 import br.com.grupotechnos.watch.protocol.profile.GattCandidate
 import br.com.grupotechnos.watch.protocol.profile.Profiles
 import br.com.grupotechnos.watch.protocol.transport.DiscoveredCharacteristic
@@ -10,14 +11,30 @@ import br.com.grupotechnos.watch.protocol.transport.TransportEvents
 import br.com.grupotechnos.watch.protocol.transport.WriteType
 
 /**
+ * Resposta de uma leitura GATT do [FakeTransport] ([FakeTransport.onRead]).
+ *
+ * @property value bytes lidos (`null` numa falha).
+ * @property status status GATT entregue em `onReadCompleted`.
+ */
+internal class ReadReply(val value: ByteArray?, val status: Int) {
+	companion object {
+		/** Leitura bem-sucedida de [value]. */
+		fun ok(value: ByteArray): ReadReply = ReadReply(value.copyOf(), GattStatus.SUCCESS)
+
+		/** Characteristic inexistente (o padrão de um transporte sem [FakeTransport.onRead]). */
+		val NOT_FOUND: ReadReply = ReadReply(null, GattStatus.NOT_FOUND)
+	}
+}
+
+/**
  * [Transport] de teste que responde como um host bem comportado, de forma síncrona: cada chamada já enfileira o
  * evento de conclusão em [events] (a sessão só processa depois, na thread dela, como num host real).
  *
  * Dois modos de relógio, escolhidos por quem monta o teste:
- * - **Roteiro**: [onWrite] chama um [SmaWatchSimulator] (ver [scripted]) ou um [IdoWatchSimulator] (ver [scriptedIdo]),
- *   que responde por `cmd/key`.
- * - **Replay**: [onWrite] e [onNotificationsEnabled] são ligados a um [ReplayDriver], que confere cada TX contra uma
- *   gravação e emite os RX gravados.
+ * - **Roteiro**: [onWrite] chama um [SmaWatchSimulator] (ver [scripted]), um [IdoWatchSimulator] (ver [scriptedIdo]) ou
+ *   um [CrpWatchSimulator] (ver [scriptedCrp], que também liga [onRead]), que responde por `cmd/key` ou `(cmd, sub)`.
+ * - **Replay**: [onWrite], [onRead] e [onNotificationsEnabled] são ligados a um [ReplayDriver], que confere cada TX e cada
+ *   leitura contra uma gravação e emite os RX gravados, cada um na characteristic gravada.
  *
  * Controle do link pelo teste: [connectBehavior] decide se `connect` abre o link na hora; [completeConnect],
  * [dropLink] e [setBluetooth] simulam eventos do lado do host. É o contrato que a sessão assume
@@ -53,6 +70,18 @@ internal class FakeTransport(
 	var answerDiscovery: Boolean = true
 
 	var notificationsStatus: Int = GattStatus.SUCCESS
+
+	/**
+	 * Status da CCCD de cada characteristic; `null` simula um host que não responde. O padrão devolve
+	 * [notificationsStatus] para todas.
+	 */
+	var notificationsStatusOf: (characteristic: String) -> Int? = { notificationsStatus }
+
+	/** Leituras GATT: `null` (o padrão) responde `NOT_FOUND` a todas, como um relógio sem a characteristic. */
+	var onRead: ((service: String, characteristic: String) -> ReadReply)? = null
+
+	/** Chamado depois de entregar cada `onReadCompleted` (o replay emite aí os RX gravados depois da leitura). */
+	var afterRead: (() -> Unit)? = null
 
 	/** MTU devolvido; `null` simula um host que não responde ao pedido. */
 	var mtuReply: Int? = 247
@@ -113,8 +142,9 @@ internal class FakeTransport(
 
 	override fun enableNotifications(service: String, characteristic: String, requestId: Int) {
 		calls += "enableNotifications($characteristic)"
-		events.onNotificationsEnabled(requestId, notificationsStatus)
-		if (notificationsStatus == GattStatus.SUCCESS) onNotificationsEnabled?.invoke()
+		val status = notificationsStatusOf(characteristic) ?: return
+		events.onNotificationsEnabled(requestId, status)
+		if (status == GattStatus.SUCCESS) onNotificationsEnabled?.invoke()
 	}
 
 	override fun requestMtu(mtu: Int, requestId: Int) {
@@ -139,7 +169,9 @@ internal class FakeTransport(
 
 	override fun read(service: String, characteristic: String, requestId: Int) {
 		calls += "read($characteristic)"
-		events.onReadCompleted(requestId, null, GattStatus.NOT_FOUND)
+		val reply = onRead?.invoke(service, characteristic) ?: ReadReply.NOT_FOUND
+		events.onReadCompleted(requestId, reply.value?.copyOf(), reply.status)
+		afterRead?.invoke()
 	}
 
 	/** Abre uma conexão que estava pendente. */
@@ -149,9 +181,14 @@ internal class FakeTransport(
 		events.onConnected()
 	}
 
-	/** Uma notificação do relógio. */
+	/** Uma notificação do relógio em [notifyCharacteristic]. */
 	fun notify(value: ByteArray) {
-		deliverNotification?.invoke(notifyCharacteristic, value) ?: events.onNotification(notifyCharacteristic, value)
+		notifyOn(notifyCharacteristic, value)
+	}
+
+	/** Uma notificação do relógio em [characteristic] (no CRP, `fee1`, `2a19` ou `2a37` além do `fee3`). */
+	fun notifyOn(characteristic: String, value: ByteArray) {
+		deliverNotification?.invoke(characteristic, value) ?: events.onNotification(characteristic, value)
 	}
 
 	/** O link cai sozinho (relógio longe, desligado). */
@@ -180,6 +217,23 @@ internal class FakeTransport(
 	fun disconnectCount(): Int = calls.count { it == "disconnect" }
 
 	companion object {
+		/**
+		 * Serviços descobertos de um candidato: o principal ([serviceOf]) e os das `sideNotify`, cada characteristic lateral
+		 * no seu serviço; uma lateral do mesmo serviço do candidato entra nele.
+		 */
+		fun servicesOf(candidate: GattCandidate): List<DiscoveredService> {
+			val main = serviceOf(candidate)
+			val byService = LinkedHashMap<String, MutableList<DiscoveredCharacteristic>>()
+			byService[main.uuid] = main.characteristics.toMutableList()
+			for (side in candidate.sideNotify) {
+				val list = byService.getOrPut(side.service) { mutableListOf() }
+				if (list.none { it.uuid == side.characteristic }) {
+					list += DiscoveredCharacteristic(side.characteristic, canRead = true, canWrite = false, canWriteWithoutResponse = false, canNotify = true)
+				}
+			}
+			return byService.map { (uuid, characteristics) -> DiscoveredService(uuid, characteristics) }
+		}
+
 		/** Serviço descoberto com as characteristics de um candidato (escrita, notificação e as `extraNotify`). */
 		fun serviceOf(candidate: GattCandidate): DiscoveredService =
 			DiscoveredService(
@@ -206,6 +260,48 @@ internal class FakeTransport(
 			val transport = ido()
 			val simulator = IdoWatchSimulator(schedule = schedule) { characteristic, value -> transport.events.onNotification(characteristic, value) }
 			transport.onWrite = { simulator.onPhoneWrite(it) }
+			return transport to simulator
+		}
+
+		/**
+		 * Transporte de um relógio CRP como o P85 da captura: `FEEA` (`fee1` leitura e notificação, `fee2` escrita sem
+		 * resposta, `fee3` notificação), `180D`/`2a37`, `180F`/`2a19` e `180A` com `2a28` e `2a29`; notificações em `fee3`.
+		 * Sem [CrpWatchSimulator]: quem monta o teste liga [onWrite] e [onRead] (ver [scriptedCrp]) ou um replay.
+		 */
+		fun crp(): FakeTransport {
+			val feea = Profiles.CRP_FEEA
+			fun characteristic(uuid: String, read: Boolean = false, writeNoResponse: Boolean = false, notify: Boolean = false) =
+				DiscoveredCharacteristic(uuid, canRead = read, canWrite = false, canWriteWithoutResponse = writeNoResponse, canNotify = notify)
+			val services = listOf(
+				DiscoveredService(
+					CrpGatt.HEART_RATE_SERVICE,
+					listOf(characteristic(CrpGatt.HEART_RATE, notify = true)),
+				),
+				DiscoveredService(CrpGatt.BATTERY_SERVICE, listOf(characteristic(CrpGatt.BATTERY_LEVEL, read = true, notify = true))),
+				DiscoveredService(
+					CrpGatt.DEVICE_INFO_SERVICE,
+					listOf(characteristic(CrpGatt.FIRMWARE_REVISION, read = true), characteristic(CrpGatt.PROTOCOL_VERSION, read = true)),
+				),
+				DiscoveredService(
+					feea.service,
+					listOf(
+						characteristic(CrpGatt.STEPS_TODAY, read = true, notify = true),
+						characteristic(feea.write, writeNoResponse = true),
+						characteristic(feea.notify, notify = true),
+					),
+				),
+			)
+			return FakeTransport(services = services).apply { notifyCharacteristic = feea.notify }
+		}
+
+		/** Transporte CRP com um [CrpWatchSimulator] que responde como o P85 da captura do app de produção. */
+		fun scriptedCrp(
+			schedule: (delayMs: Long, action: () -> Unit) -> Unit = { _, action -> action() },
+		): Pair<FakeTransport, CrpWatchSimulator> {
+			val transport = crp()
+			val simulator = CrpWatchSimulator(schedule = schedule) { characteristic, value -> transport.notifyOn(characteristic, value) }
+			transport.onWrite = { simulator.onPhoneWrite(it) }
+			transport.onRead = { _, characteristic -> simulator.onPhoneRead(characteristic) }
 			return transport to simulator
 		}
 

@@ -15,13 +15,23 @@ public enum class LogLevel {
 	ERROR,
 }
 
-/** Sentido de um pacote no link: do telefone para o relógio ([TX]) ou do relógio para o telefone ([RX]). */
+/**
+ * Sentido de um pacote no link: do telefone para o relógio ([TX]), do relógio para o telefone ([RX]) ou o valor
+ * devolvido por uma leitura GATT ([READ]).
+ */
 public enum class FrameDirection {
 	/** Escrita do telefone na characteristic de escrita. */
 	TX,
 
-	/** Notificação do relógio na characteristic de notificação. */
+	/** Notificação do relógio numa characteristic de notificação. */
 	RX,
+
+	/**
+	 * Valor devolvido por uma leitura GATT que o driver pediu (`DriverLink.read`), com a characteristic lida. O CRP lê a
+	 * versão do protocolo (2A29), o firmware (2A28), a bateria (2A19) e os passos do dia (FEE1); sem a leitura gravada,
+	 * uma gravação CRP não reproduz.
+	 */
+	READ,
 }
 
 /**
@@ -55,11 +65,12 @@ public interface WatchLogger {
 	public fun log(level: LogLevel, tag: String, message: String)
 
 	/**
-	 * Um pacote GATT cru, exatamente como foi escrito ou notificado (um fragmento, não um frame remontado).
+	 * Um pacote GATT cru, exatamente como foi escrito, notificado ou lido (um fragmento, não um frame remontado).
 	 *
 	 * É a fonte para gravar fixtures: o host pode repassar estes pacotes para [FrameJsonl.line]. Chega uma vez por
 	 * pacote de uma conexão da sessão; uma notificação que a sessão descarta por não ter conexão para recebê-la (depois
-	 * do fim da conexão ou em outra characteristic) vai só para [log], em DEBUG.
+	 * do fim da conexão ou em outra characteristic) vai só para [log], em DEBUG. Uma leitura GATT bem-sucedida chega com
+	 * [FrameDirection.READ] e o valor lido; uma leitura que falha não chega aqui.
 	 *
 	 * @param characteristic UUID normalizado da characteristic.
 	 * @param summary descrição legível dada pelo driver (ex.: `"seq=3 02/01 SET_TIME len=4 crc=ok"`),

@@ -11,21 +11,22 @@ O host (o Core React Native, ou um app nativo) implementa três interfaces e con
 - [br.com.grupotechnos.watch.protocol.session.WatchSession]: a fachada (parear, reconectar, comandos, sincronização);
   os resultados chegam por [br.com.grupotechnos.watch.protocol.session.WatchSessionListener].
 
-Tudo o que é protocolo de fabricante (frame, CRC, handshake, catálogo de comandos do SMA e do iDO) é `internal` e não
-aparece aqui. A API não usa `suspend`, `Flow` nem tipos do `kotlinx-datetime`, para o Swift consumir o framework sem shim.
+Tudo o que é protocolo de fabricante (frame, CRC, handshake, catálogo de comandos do SMA, do iDO e do CRP) é `internal`
+e não aparece aqui. A API não usa `suspend`, `Flow` nem tipos do `kotlinx-datetime`, para o Swift consumir o framework sem shim.
 O framework iOS `TechnosWatchProtocol` é gerado pelo módulo `technos-watch-bridge` (`:bridge`), que exporta este módulo
 inteiro, com os mesmos nomes; lá ficam as tarefas `checkObjcHeader` (confere o header gerado) e `checkSwiftInterop`
 (compila um host Swift mínimo contra ele). Este módulo não depende do `:bridge`. No iOS, o pacote
 `br.com.grupotechnos.watch.protocol.ios` converte os bytes entre `ByteArray` e `NSData` (`Data` no Swift).
 
 Documentação de desenho no repositório: `docs/arquitetura.md` (camadas, threading, máquina de estados, erros),
-`docs/protocolo-sma.md` (protocolo byte a byte), `docs/sma-dados.md`, `docs/protocolo-ido.md` (o iDO do Life Ultra GPS), `docs/fixtures.md`, `docs/decisoes.md`,
+`docs/protocolo-sma.md` (protocolo byte a byte), `docs/sma-dados.md`, `docs/protocolo-ido.md` (o iDO do Life Ultra GPS),
+`docs/protocolo-crp.md` (o CRP do Condor Reebok), `docs/fixtures.md`, `docs/decisoes.md`,
 `docs/pendencias.md` (validação no relógio que ficou para depois) e `docs/glossario.md`.
 
 # Package br.com.grupotechnos.watch.protocol.domain
 
-Tipos puros que atravessam a API: estado da conexão, identificação, bateria, passos, sono e os códigos de erro
-estáveis. Datas são epoch millis mais strings ISO-8601 com offset; nada depende de plataforma.
+Tipos puros que atravessam a API: estado da conexão, identificação, bateria (com o estado de carga), passos, sono e os
+códigos de erro estáveis. Datas são epoch millis mais strings ISO-8601 com offset; nada depende de plataforma.
 
 # Package br.com.grupotechnos.watch.protocol.transport
 
@@ -34,8 +35,10 @@ GATT, status e normalização de UUIDs. Só bytes, UUIDs e status; nenhum protoc
 
 # Package br.com.grupotechnos.watch.protocol.profile
 
-Os modelos suportados como dados: nomes de advertising, serviços GATT em ordem de prioridade e quirks (timeouts, MTU,
-payload do BIND, agregação de passos, retenção). `DeviceRegistry` identifica o modelo a partir do scan.
+Os modelos suportados como dados (fitGPS, Life Ultra GPS e Condor Reebok): nomes e prefixos de advertising, serviços
+GATT em ordem de prioridade, com as notificações extras e laterais (`NotifyChannel`), e quirks (timeouts, MTU, atraso
+entre frames, payload do BIND, agregação de passos, retenção, vínculo Bluetooth clássico, transport bridging no iOS).
+`DeviceRegistry` identifica o modelo a partir do scan (nome exato ou prefixo, depois de `trim`).
 
 # Package br.com.grupotechnos.watch.protocol.session
 
@@ -49,7 +52,8 @@ internos (`DeviceDriver`, `DriverLink`) não é público.
 
 # Package br.com.grupotechnos.watch.protocol.log
 
-`WatchLogger`, que o host implementa, e `FrameJsonl`, o formato das gravações de tráfego usadas como fixtures.
+`WatchLogger`, que o host implementa (cada pacote escrito, notificado ou lido, com `FrameDirection` `TX`, `RX` ou
+`READ`), e `FrameJsonl`, o formato das gravações de tráfego usadas como fixtures.
 
 # Package br.com.grupotechnos.watch.protocol.ios
 

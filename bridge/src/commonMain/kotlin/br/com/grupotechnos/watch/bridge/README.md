@@ -16,7 +16,8 @@ host Android do Repo 2 já é essa casca: o `NativeCoreNextModule` chama o `Core
 `CoreHost`.
 
 **Não faz.** Não conhece BLE, arquivo, React Native nem thread de plataforma: o que depende do sistema fica atrás de
-`CoreHost` (permissões, Bluetooth, endereço, scan, trabalho em segundo plano, pareamento salvo, gravação, log),
+`CoreHost` (permissões, Bluetooth, endereço, scan, trabalho em segundo plano, pareamento salvo, gravação, log, vínculo
+Bluetooth clássico),
 `CoreEventSink` (o módulo JS) e `CoreCompletion` (a Promise). Não decide nada sobre o relógio (isso é o `:protocol`):
 chama a `WatchSession` e muda a forma do dado. A conversão para a ponte do React Native fica em cada host
 (`WritableConverter`, `ReadableConverter` e `PromiseCompletion` no Android;
@@ -26,16 +27,17 @@ chama a `WatchSession` e muda a forma do dado. A conversão para a ponte do Reac
 
 | Tipo | Visibilidade | Papel |
 |---|---|---|
-| `CoreBridge` | pública | Um método por método JS do spec (mesmo nome e argumentos; os números do JS como `Double`) e os ganchos do processo (`attach`, `invalidate`, `onHostResume`, `onBluetoothTurnedOff`/`On`, `onScannedDevice`, `onScanFailed`, `onLogEntry`). Dono do listener da sessão, da `RequestRegistry`, da `PendingEvents`, do `userDisconnected` e do sync em andamento. Montado pelo host com a sessão pronta: `CoreBridge(session, logger, host)`. |
-| `CoreHost` | pública (interface) | O que o controlador pede à plataforma, um por processo: `missingScanPermission`, `missingConnectPermission`, `isBluetoothEnabled`, `isValidAddress`, `startScan`/`stopScan`, `startSyncWork`/`stopSyncWork`, `loadPairing`/`savePairing`/`clearPairing`, `setRecordingDeviceName`/`setRecordingFirmware` (firmware anulável), `logEntries`, `exportLogs` (`@Throws`), `clearLogs`, `setLogLevel`. |
+| `CoreBridge` | pública | Um método por método JS do spec (mesmo nome e argumentos; os números do JS como `Double`) e os ganchos do processo (`attach`, `invalidate`, `onHostResume`, `onBluetoothTurnedOff`/`On`, `onScannedDevice`, `onScanFailed`, `onLogEntry`, `onClassicBondResult`). Dono do listener da sessão, da `RequestRegistry`, da `PendingEvents`, do `userDisconnected`, do sync em andamento e do estado do vínculo clássico (pedido em andamento, endereços recusados, pedidos abandonados por um `forgetDevice`, alvos do `forgetDevice`). Montado pelo host com a sessão pronta: `CoreBridge(session, logger, host)`. |
+| `CoreHost` | pública (interface) | O que o controlador pede à plataforma, um por processo: `missingScanPermission`, `missingConnectPermission`, `isBluetoothEnabled`, `isValidAddress`, `startScan`/`stopScan`, `startSyncWork`/`stopSyncWork`, `loadPairing`/`savePairing`/`clearPairing`, `setRecordingDeviceName`/`setRecordingFirmware` (firmware anulável), `logEntries`, `exportLogs` (`@Throws`), `clearLogs`, `setLogLevel`, e o vínculo Bluetooth clássico (BR/EDR): `hasClassicBond` (no iOS, sempre `false`), `requestClassicBond` (assíncrono; o resultado volta por `CoreBridge.onClassicBondResult`) e `removeClassicBond` (melhor esforço). |
+| `ClassicBondResult` | pública (enum) | Resultado do `requestClassicBond`: `BONDED` (só log), `FAILED` (`onError` `CLASSIC_BOND_FAILED`, não pede de novo até o próximo `pairDevice`), `UNSUPPORTED` (iOS: só WARN com a dica de Ajustes, não pede de novo até o próximo `pairDevice`). |
 | `CoreEventSink` | pública (interface) | A instância atual do módulo JS: `canEmit()` e `emit(name, payload)`. Separado do `CoreHost` porque o módulo é recriado a cada reload do JS. |
 | `CoreCompletion` | pública (interface) | `resolve(value)`/`reject(code, message)`, no lugar da Promise do React Native. Valores: `null`, `Boolean`, `String`, `Map`, `List` de `Map`. |
 | `CorePairing` | pública | O relógio salvo: `address`, `profileId`, `name`. |
 | `CoreLogEntry` | pública | Uma entrada do log do host na forma neutra (`ts`, `level`, `tag`, `message`, `dir`, `hex`), para o `onLog` e o `getLogs`. |
-| `EventMapper` | pública | Domínio → `Map<String, Any?>` nos formatos de `src/types/events.ts` (mesmos nomes do Core atual). Só o `date` do sono é calculado aqui (`startOfDayIso`), no padrão `yyyy-MM-dd'T'HH:mm:ssXXX`. |
+| `EventMapper` | pública | Domínio → `Map<String, Any?>` nos formatos de `src/types/events.ts` (mesmos nomes do Core atual). Só o `date` do sono é calculado aqui (`startOfDayIso`), no padrão `yyyy-MM-dd'T'HH:mm:ssXXX`. O `charging` do `onBatteryStatus` vem de `Battery.charging` (no CRP, 2A19 acima de 100; no SMA e no iDO, sempre `false`). |
 | `StateMapper` | pública | `ConnectionState` → `deviceConnectStates`: `DISCONNECTED`/`RECONNECTING` 0, `CONNECTING`/`CONFIGURING`/`HANDSHAKING` 1, `READY`/`SYNCING` 2, `BLUETOOTH_OFF` 4; `isConnected` só em `READY`/`SYNCING`. |
 | `SavedDataMapper` | pública | `deletedSavedData`: categoria (5 passos, 0 sono) → `DataKind`; `registered_at` → dia local (`yyyy-MM-dd`), aceitando e recusando o mesmo que o `java.time` antigo. |
-| `HostErrorCodes` | pública | Códigos que nascem no host: `PERMISSION_DENIED`, `BLUETOOTH_OFF`, `INVALID_ARGUMENT`, `IO_ERROR`. |
+| `HostErrorCodes` | pública | Códigos que nascem no host: `PERMISSION_DENIED`, `BLUETOOTH_OFF`, `INVALID_ARGUMENT`, `IO_ERROR` e `CLASSIC_BOND_FAILED` (só `onError`, `requestId` `-1`, `method` `"classicBond"`). |
 | `PendingEvents<P>` | pública | Fila de eventos até o módulo poder emitir; entrega em ordem, dentro de uma trava reentrante; capacidade 500, descarta o mais antigo. |
 | `RequestRegistry<T>` | pública | `requestId` → o que liquida a Promise + nome do método JS; liquidado uma vez; ids de 1 a `Int.MAX_VALUE`, nunca `-1`. |
 | `IsoDates` | interna | Leitura e escrita das datas reproduzindo o `java.time` (as quatro leituras do `registered_at`, o `XXX`, o início do dia com horário de verão); o `kotlinx-datetime` faz só a aritmética de fuso. |
@@ -74,6 +76,26 @@ Foundation no código comum. O `:protocol` nunca depende daqui.
 - `CoreBridge`: o cabeçalho da gravação só passa a nomear um relógio quando a tentativa dele chega ao handshake
   (`HANDSHAKING`, a primeira etapa que grava pacote), nunca no pedido de conexão nem num link que falha na configuração; ao trocar de relógio (perfil ou endereço), o firmware do anterior vai `null` até o `onDeviceInfo`
   do novo, e outro link do mesmo relógio não chama o host (ADR 24).
+- `CoreBridge`, vínculo Bluetooth clássico (perfis com `Quirks.classicBond`, hoje só o Condor Reebok): no `READY` que
+  fecha um handshake (o que vem de `HANDSHAKING`; o `READY` do fim de um sync não consulta nada, para não gastar uma
+  chamada ao sistema e um INFO por sync), depois de gravar o pareamento e antes do evento, pergunta `hasClassicBond` e,
+  se o sistema não tem o vínculo, chama
+  `requestClassicBond` uma vez (marca o pedido em andamento antes, porque o resultado pode voltar de dentro da
+  chamada). Não pergunta nem pede com o "usuário desconectou", sem endereço na sessão, com outro pedido em andamento ou
+  para um endereço que falhou (`FAILED`) ou não é suportado (`UNSUPPORTED`) nesta execução, até o próximo `pairDevice`
+  desse endereço. `FAILED` vira `onError` `CLASSIC_BOND_FAILED` com `requestId` `-1` e `method` `"classicBond"`;
+  `UNSUPPORTED`, só um WARN com a mensagem do host; `BONDED`, só um INFO. Para perfis sem o quirk (SMA, iDO) nenhum
+  dos três métodos do host é chamado, e o golden não muda.
+- `CoreBridge`, `forgetDevice` de um perfil com `Quirks.classicBond`: o endereço (o da sessão ou, sem ele, o do
+  pareamento salvo, lido antes de apagá-lo) fica guardado com o `requestId`; no terminal da sessão (`onCompleted` ou
+  `onError`), a ordem é: o relógio já recebeu o pedido de desvincular (o `F8` do CRP), `removeClassicBond`, o
+  pareamento apagado de novo e a liquidação. A remoção não depende da completion (um `invalidate` no meio não a
+  impede). Um pedido de vínculo ainda em andamento para esse endereço é abandonado antes do `removeClassicBond`: deixa
+  de contar como em andamento, e o resultado que o host ainda manda (no Android, a falha do pedido que a remoção
+  cancela) só vai para o log, sem `onError` nem recusa; o próximo `pairDevice` do endereço limpa o abandono. O
+  `disconnectCurrentDevice` nunca remove o vínculo.
+- `CoreBridge`: o `pairDevice` resolve o perfil pelo `appName`, pelo `id` ou por um nome BLE exato e, por último, pelo
+  `DeviceRegistry.identify` (com `trim` e os prefixos): `"P85-1234"` é o Condor Reebok.
 - `CoreBridge`: o trabalho em segundo plano liga no `onSyncStarted` (antes do evento) e desliga uma vez, no fim do sync,
   no erro do sync ou com a sessão fora de `READY`/`SYNCING`; o erro de outro pedido não o desliga.
 - `CoreBridge`: o `attach` do mesmo `CoreEventSink` não entrega a fila de novo; o `attach` e o `invalidate` trocam o sink
@@ -103,7 +125,17 @@ Foundation no código comum. O `:protocol` nunca depende daqui.
 - `CoreBridgeLifecycleTest`, `CoreBridgeConnectionTest`, `CoreBridgeCommandsTest`, `CoreBridgeHistoryTest` e
   `CoreBridgeLogsTest`: os testes de contrato do controlador, sobre uma `WatchSession` de verdade em tempo virtual (o
   kit de teste do `:protocol`, `protocol/src/testKit/README.md`), com um `FakeCoreHost`, um `CoreEventSink` e
-  completions que gravam tudo num diário só (`CoreBridgeTestKit.kt`), para conferir a ordem.
+  completions que gravam tudo num diário só (`CoreBridgeTestKit.kt`), para conferir a ordem. O `FakeCoreHost` grava
+  `hasClassicBond(<endereço>)` nas consultas (com a resposta em `classicBonded`) e `host requestClassicBond`/`host
+  removeClassicBond` no diário.
+- `CoreBridgeIdoTest` e `CoreBridgeCrpTest`: as outras famílias pelo controlador, com o `IdoWatchSimulator` e o
+  `CrpWatchSimulator` do kit. O do CRP confere o perfil pelo nome e pelo prefixo `P85`, o pedido do vínculo clássico
+  (uma vez por handshake e nunca no fim de um sync, nunca com o vínculo no sistema, nunca depois de
+  `FAILED`/`UNSUPPORTED` até o próximo `pairDevice`, com o resultado vindo de dentro do pedido), o `onError`
+  `CLASSIC_BOND_FAILED`, a ordem do `forgetDevice` (`F8`, remoção do vínculo, pareamento apagado, `resolve`; também sem
+  sessão, pelo pareamento salvo; com um pedido em andamento, o resultado dele só no log), o `disconnectCurrentDevice` que
+  mantém o vínculo, o SMA e o iDO sem nenhuma chamada de vínculo, e os avisos espontâneos (`onBatteryStatus` com
+  `charging`, `onPedometer` de FEE1).
 - `CoreBridgeGoldenTest`: a gravação real do fitGPS passa pelo controlador, método JS por método JS, com o replay
   estrito, e o diário inteiro é comparado com `bridge/golden/` (como ler e regenerar: `bridge/golden/README.md`). Cada
   target imprime uma linha `GOLDEN` no `system-out` do XML.

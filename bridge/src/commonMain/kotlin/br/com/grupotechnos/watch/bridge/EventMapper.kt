@@ -67,10 +67,16 @@ public object EventMapper {
 		"deviceId" to info.address,
 	)
 
-	/** `onBatteryStatus` (`BatteryStatusEvent`). O SMA não informa carregamento; `battery` é o campo legado `"N%"`. */
+	/**
+	 * `onBatteryStatus` (`BatteryStatusEvent`). `charging` é o [Battery.charging] do domínio: no CRP, `true` quando a
+	 * leitura de 2A19 passa de 100 (com `percentage` = valor − 100, regra do Core de produção,
+	 * `core@v4.3.57:android/src/main/java/com/crp/bluetooth/CRPService.java:1814-1822`); o SMA e o iDO não informam
+	 * carregamento e mandam sempre `false`. `battery` é o campo legado `"N%"`. O mesmo mapa serve à resposta do
+	 * `getBatteryStatus` e ao aviso espontâneo do relógio (`onBattery` com `requestId` `-1`).
+	 */
 	public fun battery(battery: Battery): Map<String, Any?> = mapOf(
 		"percentage" to battery.percent,
-		"charging" to false,
+		"charging" to battery.charging,
 		"battery" to "${battery.percent}%",
 	)
 

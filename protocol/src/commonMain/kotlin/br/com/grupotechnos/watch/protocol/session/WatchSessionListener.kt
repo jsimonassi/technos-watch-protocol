@@ -28,19 +28,24 @@ public interface WatchSessionListener {
 	/**
 	 * O estado da conexão mudou.
 	 *
-	 * @param phase subetapa do handshake para log e UI (no SMA e no iDO: `"BIND"` ou `"LOGIN"`); `null` fora do handshake.
+	 * @param phase subetapa do handshake para log e UI (no SMA e no iDO: `"BIND"` ou `"LOGIN"`; no CRP: `"VERSION"`);
+	 * `null` fora do handshake.
 	 */
 	public fun onStateChanged(state: ConnectionState, phase: String?)
 
 	/** Resposta de [WatchSession.readDeviceInfo]. Terminal. */
 	public fun onDeviceInfo(requestId: Int, info: DeviceInfo)
 
-	/** Resposta de [WatchSession.readBattery]. Terminal. */
+	/**
+	 * Resposta de [WatchSession.readBattery] (terminal) ou bateria que o relógio mandou sozinho
+	 * ([WatchSession.NO_REQUEST_ID]; no CRP, a notificação de 2A19).
+	 */
 	public fun onBattery(requestId: Int, battery: Battery)
 
 	/**
 	 * Total de passos de hoje, depois de [WatchSession.refreshSteps] (terminal) ou quando o relógio
-	 * avisa que os dados mudaram ([WatchSession.NO_REQUEST_ID]).
+	 * avisa que os dados mudaram ([WatchSession.NO_REQUEST_ID]; no CRP, também as notificações de passos ao vivo, no
+	 * máximo uma a cada 2 s).
 	 */
 	public fun onLiveSteps(requestId: Int, today: StepsDay)
 

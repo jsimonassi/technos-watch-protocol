@@ -8,6 +8,14 @@ import br.com.grupotechnos.watch.protocol.transport.WriteType
 import kotlinx.coroutines.channels.ReceiveChannel
 
 /**
+ * Uma notificação de uma characteristic de `GattCandidate.sideNotify`, com a origem (no CRP: `fee1`, `2a19` ou `2a37`).
+ *
+ * @property characteristic UUID normalizado (128 bits, minúsculas) da characteristic que notificou.
+ * @property value bytes da notificação, como chegaram.
+ */
+internal class CharacteristicNotification(val characteristic: String, val value: ByteArray)
+
+/**
  * O que a sessão entrega a um driver com codec próprio: um link GATT já configurado.
  *
  * A sessão cria um [DriverLink] por conexão, depois de descobrir os serviços, escolher o [GattCandidate],
@@ -16,7 +24,8 @@ import kotlinx.coroutines.channels.ReceiveChannel
  *
  * Garantias da implementação da sessão:
  * - [write] e [read] são serializados: duas chamadas concorrentes nunca viram duas operações GATT simultâneas.
- * - Todo pacote escrito e notificado é registrado em `WatchLogger.frame`, com `DeviceDriver.describe` como resumo.
+ * - Todo pacote escrito, notificado e lido é registrado em `WatchLogger.frame` (TX, RX e READ), com
+ *   `DeviceDriver.describe(characteristic, value)` como resumo.
  * - Falha de transporte vira `WatchException(TRANSPORT)`; queda do link vira `WatchException(DISCONNECTED)`
  *   e cancela a corrotina que estava suspensa.
  */
@@ -41,6 +50,12 @@ internal interface DriverLink {
 	 * ao mesmo decodificador), uma por pacote, na ordem de chegada. Um único consumidor.
 	 */
 	val notifications: ReceiveChannel<ByteArray>
+
+	/**
+	 * Notificações das characteristics de `gatt.sideNotify` (no CRP: `fee1`, `2a19` e `2a37`), com a origem, na ordem de
+	 * chegada. Um único consumidor. Vazio (e fechado com o link) nas famílias sem `sideNotify`.
+	 */
+	val sideNotifications: ReceiveChannel<CharacteristicNotification>
 
 	/** Escreve um pacote na characteristic `gatt.write` e suspende até o host confirmar a escrita. */
 	suspend fun write(value: ByteArray, type: WriteType = WriteType.WITH_RESPONSE)

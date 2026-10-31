@@ -12,8 +12,9 @@ import kotlinx.serialization.json.longOrNull
 
 /**
  * Lê gravações `.jsonl` no formato de `log/FrameJsonl` (`docs/fixtures.md`): a primeira linha não vazia é o
- * cabeçalho (`"type":"header"`), as demais são pacotes (`"type":"packet"`). Linhas com outro `type` são ignoradas,
- * para o formato poder ganhar linhas novas sem quebrar gravações antigas.
+ * cabeçalho (`"type":"header"`), as demais são pacotes (`"type":"packet"`, `dir` `TX`, `RX` ou `READ`). Linhas com
+ * outro `type` e chaves extras do cabeçalho (as fixtures de referência trazem `source`, `gatt`, `redactions`…) são
+ * ignoradas, para o formato poder ganhar campos novos sem quebrar gravações antigas.
  *
  * Roda nos quatro targets de teste (JVM, unit Android debug e release, simulador iOS): o parse usa só o `JsonElement`
  * do `kotlinx-serialization-json` (sem plugin de serialização) e o arquivo chega por [readFixtureText], que cada
@@ -42,7 +43,8 @@ internal object RecordingLoader {
 				direction = when (val dir = json.string("dir")) {
 					"TX" -> FrameDirection.TX
 					"RX" -> FrameDirection.RX
-					else -> throw IllegalArgumentException("$where dir must be TX or RX, got $dir")
+					"READ" -> FrameDirection.READ
+					else -> throw IllegalArgumentException("$where dir must be TX, RX or READ, got $dir")
 				},
 				atMs = json["atMs"]?.jsonPrimitive?.longOrNull ?: throw IllegalArgumentException("$where atMs missing"),
 				characteristic = json.string("characteristic") ?: throw IllegalArgumentException("$where characteristic missing"),

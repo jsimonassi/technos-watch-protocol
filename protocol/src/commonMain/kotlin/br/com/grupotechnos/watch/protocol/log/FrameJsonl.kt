@@ -38,7 +38,8 @@ public object FrameJsonl {
 	}
 
 	/**
-	 * Linha de pacote.
+	 * Linha de pacote. O `dir` é o nome de [direction]: `"TX"`, `"RX"` ou `"READ"` (valor de uma leitura GATT, com a
+	 * characteristic lida).
 	 *
 	 * @param atMs milissegundos desde o início da gravação.
 	 * @param value bytes do pacote, gravados em hexadecimal maiúsculo sem separadores.

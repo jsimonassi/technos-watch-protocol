@@ -2,15 +2,20 @@ package br.com.grupotechnos.watch.protocol.testing
 
 import br.com.grupotechnos.watch.protocol.log.FrameDirection
 import br.com.grupotechnos.watch.protocol.sma.codec.SmaFrameCodec
+import br.com.grupotechnos.watch.protocol.transport.GattStatus
+import br.com.grupotechnos.watch.protocol.transport.GattUuid
 import br.com.grupotechnos.watch.protocol.util.ByteReader
 import br.com.grupotechnos.watch.protocol.util.Hex
 
 /**
  * Faz o [FakeTransport] se comportar como o relógio de uma [Recording].
  *
- * A cada TX da sessão, compara com o próximo TX da gravação e emite, na ordem, todos os RX gravados até o TX
- * seguinte. RX anteriores ao primeiro TX saem quando as notificações são ligadas. Os tempos (`atMs`) são ignorados:
- * as respostas saem na hora, e o tempo virtual do teste é que conta para os timeouts.
+ * Um "pedido" é um TX ou uma leitura (READ). A cada TX da sessão, compara com o próximo pacote da gravação, que tem de
+ * ser TX; a cada leitura ([FakeTransport.onRead]), responde com o próximo pacote, que tem de ser um READ da mesma
+ * characteristic (senão, divergência e `NOT_FOUND`). Depois de cada pedido, emite na ordem todos os RX gravados até o
+ * pedido seguinte, cada um na characteristic gravada ([FakeTransport.notifyOn]). RX anteriores ao primeiro pedido saem
+ * quando as notificações são ligadas. Os tempos (`atMs`) são ignorados: as respostas saem na hora, e o tempo virtual do
+ * teste é que conta para os timeouts.
  *
  * **Modo estrito** ([strict] = `true`): os bytes precisam bater depois de [TxMasker], que zera só o que muda legitimamente
  * entre a gravação e o replay: o seq (bytes 6..7) de todo frame e, no `02/01` SET_TIME, o value (a hora) e o CRC
@@ -44,6 +49,13 @@ internal class ReplayDriver(
 	/** Total de TX da gravação. */
 	val recordedTx: Int = recording.packets.count { it.direction == FrameDirection.TX }
 
+	/** Total de leituras (READ) da gravação. */
+	val recordedReads: Int = recording.packets.count { it.direction == FrameDirection.READ }
+
+	/** Leituras da sessão respondidas com o READ gravado da mesma characteristic. */
+	var matchedReads: Int = 0
+		private set
+
 	/** Pacotes da gravação ainda não consumidos. */
 	val remaining: List<RecordedPacket>
 		get() = recording.packets.drop(index)
@@ -52,9 +64,43 @@ internal class ReplayDriver(
 	val remainingTx: List<RecordedPacket>
 		get() = remaining.filter { it.direction == FrameDirection.TX }
 
+	/** Leituras da gravação que a sessão ainda não fez. */
+	val remainingReads: List<RecordedPacket>
+		get() = remaining.filter { it.direction == FrameDirection.READ }
+
 	init {
 		transport.onWrite = ::onWrite
+		transport.onRead = { _, characteristic -> onRead(characteristic) }
+		transport.afterRead = ::flushAfterRead
 		transport.onNotificationsEnabled = ::emitRxUntilNextTx
+	}
+
+	private fun onRead(characteristic: String): ReadReply {
+		val expected = recording.packets.getOrNull(index)
+		val wanted = GattUuid.normalize(characteristic)
+		if (expected == null || expected.direction != FrameDirection.READ || GattUuid.normalize(expected.characteristic) != wanted) {
+			mismatches += "unexpected READ of $characteristic (next recorded: $expected) in ${recording.source}"
+			return ReadReply(null, GattStatus.NOT_FOUND)
+		}
+		index++
+		matchedReads++
+		val reply = ReadReply.ok(expected.value)
+		// Os RX gravados depois da leitura saem depois da resposta dela, como no rádio.
+		pendingAfterRead = true
+		return reply
+	}
+
+	/** `true` entre uma leitura respondida e a próxima entrega de RX ([flushAfterRead]). */
+	private var pendingAfterRead = false
+
+	/**
+	 * Emite os RX que a gravação tem depois da última leitura respondida. Chamado pelo [FakeTransport] depois de entregar
+	 * o `onReadCompleted`, para a ordem ser a da gravação (resposta da leitura, depois as notificações).
+	 */
+	fun flushAfterRead() {
+		if (!pendingAfterRead) return
+		pendingAfterRead = false
+		emitRxUntilNextTx()
 	}
 
 	private fun onWrite(value: ByteArray) {
@@ -83,7 +129,7 @@ internal class ReplayDriver(
 			val next = recording.packets.getOrNull(index) ?: return
 			if (next.direction != FrameDirection.RX) return
 			index++
-			transport.notify(next.value)
+			transport.notifyOn(next.characteristic, next.value)
 		}
 	}
 
@@ -93,6 +139,7 @@ internal class ReplayDriver(
 	fun problems(): List<String> {
 		val problems = mismatches.toMutableList()
 		if (remainingTx.isNotEmpty()) problems += "${remainingTx.size} recorded TX never sent, first: ${remainingTx.first()}"
+		if (remainingReads.isNotEmpty()) problems += "${remainingReads.size} recorded READ never done, first: ${remainingReads.first()}"
 		return problems
 	}
 }

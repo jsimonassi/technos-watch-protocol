@@ -1,10 +1,10 @@
 # Fixtures: gravações de tráfego e replay
 
-Uma *fixture* é uma gravação do tráfego GATT entre o telefone e o relógio, pacote a pacote, num arquivo `.jsonl`. Ela serve para rodar a sessão inteira (`WatchSession` → `SmaDriver` → codec) contra o relógio "gravado", sem relógio de verdade: é o critério A2a (sintética) e A2b (gravada do fitGPS) do plano.
+Uma *fixture* é uma gravação do tráfego GATT entre o telefone e o relógio, pacote a pacote, num arquivo `.jsonl`. Ela serve para rodar a sessão inteira (`WatchSession` → driver da família → codec) contra o relógio "gravado", sem relógio de verdade: é o critério A2a (sintética) e A2b (gravada do fitGPS) do plano. Uma **fixture de referência** (`fixtures/reference/`) é diferente: é a gravação de outro app (o de produção), convertida de uma captura HCI, que não reproduz contra a nossa sessão e serve de prova do que o relógio responde (seção 2; ADR 32).
 
 ## 1. Formato
 
-Um objeto JSON por linha, UTF-8. A primeira linha é o cabeçalho; cada linha seguinte é **um pacote GATT cru** (um fragmento, nunca um frame remontado). O formatador é `log/FrameJsonl` (o mesmo que o host usa em produção) e o leitor é `testing/RecordingLoader` (no kit de teste compartilhado, `protocol/src/testKit/`), que roda nos quatro targets de teste (seção 4.1).
+Um objeto JSON por linha, UTF-8. A primeira linha é o cabeçalho; cada linha seguinte é **um pacote GATT cru** (um fragmento, nunca um frame remontado) ou o valor de uma leitura GATT (`READ`). O formatador é `log/FrameJsonl` (o mesmo que o host usa em produção) e o leitor é `testing/RecordingLoader` (no kit de teste compartilhado, `protocol/src/testKit/`), que roda nos quatro targets de teste (seção 4.1).
 
 ```
 {"type":"header","device":"Mormaii_fitGPS","firmware":"1.2.3","platform":"android","mtu":247,"recordedAt":"2026-10-28T14:30:00-03:00","timeZone":"America/Sao_Paulo"}
@@ -18,20 +18,22 @@ Um objeto JSON por linha, UTF-8. A primeira linha é o cabeçalho; cada linha se
 |---|---|---|
 | `type` | `"header"` | obrigatório na primeira linha |
 | `device` | string | nome BLE do relógio |
-| `firmware` | string ou `null` | versão `x.y.z` (do `02/0A`), quando conhecida |
-| `platform` | string | `android`, `ios`, `synthetic`… só informativo |
+| `firmware` | string ou `null` | versão do firmware, quando conhecida: `x.y.z` no SMA (`02/0B`) e no iDO (`02/EB`); no CRP, o texto do relógio (`MOY-VS02-2.0.0`, do `5A 01` ou do `2A28`) |
+| `platform` | string | `android`, `ios`, `synthetic`, `android-hci` (fixture de referência convertida de um btsnoop)… só informativo |
 | `mtu` | inteiro | MTU efetivo do link (23 se não foi negociado) |
 | `recordedAt` | string | início da gravação, ISO-8601 **com offset numérico**, com ou sem milissegundos (`2026-10-29T08:14:10-03:00` ou `2026-10-29T08:14:10.933-03:00`); o replay usa como hora do `WatchClock` |
 | `timeZone` | string | fuso IANA do telefone durante a gravação; o replay usa como fuso do `WatchClock` |
 
 O `FrameRecorder` do app de exemplo passa a escrever `recordedAt` com o padrão `yyyy-MM-dd'T'HH:mm:ss.SSSxxx` (o offset zero sai `+00:00`, nunca `Z`). Os exports anteriores truncavam no segundo: na fixture real o `recordedAt` é 08:14:10 e o primeiro pacote saiu às 08:14:10,933. O leitor aceita os dois formatos (`RecordingLoaderTest`).
 
+O leitor ignora chaves que não conhece no cabeçalho. As fixtures de referência usam isso para levar a procedência: `source` (`"hci"`), `app`, `connection` (handle, início e fim da conexão e a janela pedida ao conversor), `mtuInitiator` (`"peripheral"` quando quem abriu a troca de MTU foi o relógio), `gatt` (serviços, characteristics, propriedades e se têm CCCD, sem handles), `cccdWrites` (as CCCDs que o app escreveu, na ordem) e `redactions` (o que a redação tirou ou trocou, com as contagens). As docs citam esse resumo em vez da captura bruta.
+
 **Pacote**
 
 | Campo | Tipo | Significado |
 |---|---|---|
 | `type` | `"packet"` | linhas com outro `type` são ignoradas pelo leitor (o formato pode crescer) |
-| `dir` | `"TX"` ou `"RX"` | TX = escrita do telefone; RX = notificação do relógio |
+| `dir` | `"TX"`, `"RX"` ou `"READ"` | TX = escrita do telefone; RX = notificação do relógio; READ = valor devolvido por uma leitura GATT bem-sucedida (`DriverLink.read`), com a characteristic lida (ADR 27). O CRP lê a versão do protocolo (`2a29`), o firmware (`2a28`), a bateria (`2a19`) e os passos do dia (`fee1`); sem as leituras gravadas, uma gravação CRP não reproduz |
 | `atMs` | inteiro | milissegundos desde o início da gravação (informativo: o replay não espera) |
 | `characteristic` | string | UUID de 128 bits em minúsculas |
 | `hex` | string | bytes em hexadecimal maiúsculo sem separadores |
@@ -42,13 +44,16 @@ O `FrameRecorder` do app de exemplo passa a escrever `recordedAt` com o padrão 
 fixtures/
 	synthetic/<cenário>.jsonl              gravações geradas pelo codec (procedência na seção 5)
 	real/<perfil>/<firmware>/<cenário>.jsonl   gravações do relógio de verdade, ex.: real/fitgps/1.2.3/pair-battery-version.jsonl
+	reference/<perfil>/<firmware>/<cenário>.jsonl   gravações de outro app (captura HCI convertida, com redação); nenhum teste genérico lê
 	tools/                                 entradas e saídas de exemplo dos scripts
 ```
 
-- `<perfil>` é o `DeviceProfile.id` (`fitgps`, `lifeultragps`); `<firmware>` é o lido no relógio (`02/0A` no SMA, `02/EB` no iDO); `<cenário>` diz o que foi feito, em kebab-case (`pair-sync`, `reconnect-battery`, `forget`).
+- `<perfil>` é o `DeviceProfile.id` (`fitgps`, `lifeultragps`, `condorreebok`); `<firmware>` é o lido no relógio (`02/0A` no SMA, `02/EB` no iDO, `5A 01`/`2A28` no CRP, ex.: `MOY-VS02-2.0.0`); `<cenário>` diz o que foi feito, em kebab-case (`pair-sync`, `reconnect-battery`, `forget`).
 - Um cenário por arquivo. Não editar à mão: se algo precisar sair, regrave. A única exceção até hoje é o campo `device` do cabeçalho da primeira gravação do iPhone, trocado por script e registrado na procedência dela (seção 5).
-- Todo `.jsonl` em `fixtures/real/` (qualquer profundidade) vira teste automaticamente (`RealFixturesReplayTest` para o SMA; as gravações cujo `device` o `DeviceRegistry` identifica como iDO saem dele como `REPLAY …: skipped (family IDO, …)` e rodam no `IdoRealFixturesReplayTest`, com `IdoReplayScenario` e `IdoTxMasker`), na JVM, nos testes unitários Android (debug e release) e no simulador iOS; não é preciso escrever código. A pasta `fixtures/` é input de toda tarefa de teste do Gradle, as `Test` (JVM e Android) e as `KotlinNativeTest` (simulador) (`protocol/build.gradle.kts`, seção 4.1): acrescentar, trocar ou renomear uma gravação roda os testes de novo, em vez de deixá-los `UP-TO-DATE` ou `FROM-CACHE`.
+- Todo `.jsonl` em `fixtures/real/` (qualquer profundidade) vira teste automaticamente (`RealFixturesReplayTest` para o SMA; as gravações cujo `device` o `DeviceRegistry` identifica como de outra família saem dele como `REPLAY …: skipped (family IDO, replayed by its family test)` e rodam no teste da família: as iDO no `IdoRealFixturesReplayTest`, com `IdoReplayScenario` e `IdoTxMasker`, e as CRP no `CrpRealFixturesReplayTest`, com `CrpReplayScenario` e `CrpTxMasker`; sem nenhuma gravação CRP, ele imprime `REPLAY crp: no recordings yet` e passa), na JVM, nos testes unitários Android (debug e release) e no simulador iOS; não é preciso escrever código. A pasta `fixtures/` é input de toda tarefa de teste do Gradle, as `Test` (JVM e Android) e as `KotlinNativeTest` (simulador) (`protocol/build.gradle.kts`, seção 4.1): acrescentar, trocar ou renomear uma gravação roda os testes de novo, em vez de deixá-los `UP-TO-DATE` ou `FROM-CACHE`.
 - Cada arquivo reproduzido imprime uma linha no stdout do teste, que fica no `system-out` do relatório XML de cada tarefa (`protocol/build/test-results/<tarefa>/TEST-br.com.grupotechnos.watch.protocol.session.RealFixturesReplayTest.xml`, com `<tarefa>` = `jvmTest`, `testDebugUnitTest`, `testReleaseUnitTest` ou `iosSimulatorArm64Test`): `REPLAY real/fitgps/0.2.1/pair-commands-bt-reconnect-sync.jsonl: 850 packets, TX matched 167/167, final state READY`. Sem essa linha, a gravação não rodou naquele target. O total de passos do dia que as duas gravações de 2026-10-29 e a do iPhone de 2026-10-30 produzem tem teste próprio, `RealFixturesStepsTest` (também nos quatro targets), que imprime linhas `STEPS-DAY` no `system-out` de `TEST-…session.RealFixturesStepsTest.xml` (seção 5); a noite da gravação do iPhone, o `RealFixturesSleepTest`, com uma linha `SLEEP`; e os valores de tela das gravações iDO, testes nomeados do `IdoRealFixturesReplayTest`. Uma gravação nova não entra nesses testes nomeados sozinha, só no replay genérico.
+
+- **`fixtures/reference/`** guarda gravações de outro app que não reproduzem contra a nossa sessão (a sequência de pedidos é a do outro app). Nenhum teste genérico as lê; só testes nomeados as decodificam (`CrpReferenceFixtureTest`). Hoje: as três do Condor Reebok, convertidas da captura HCI do app Condor de produção com o `scripts/btsnoop2jsonl.py` (seção 3.3; procedência na seção 5). Elas nunca são editadas à mão: se algo precisar sair, rode o conversor de novo com outra redação.
 
 ## 3. Como gravar
 
@@ -58,13 +63,14 @@ O host recebe cada pacote em `WatchLogger.frame` (uma chamada por pacote, só do
 
 Para a gravação reproduzir sem ajustes:
 1. Comece a gravar antes de tocar no relógio na lista do scan (o cabeçalho precisa da hora e do fuso do início).
-2. Depois que o estado chegar em `connected`, **espere 3 s** antes do primeiro comando: é o `postLoginDelayMs`, depois do qual a sessão manda o acerto de hora automático. O replay assume que ele vem logo depois do LOGIN (também depois de uma reconexão).
+2. Depois que o estado chegar em `connected`, **espere 3 s** antes do primeiro comando: é o `postLoginDelayMs` do fitGPS (1 s no Life Ultra GPS, 250 ms no Condor Reebok), depois do qual a sessão manda o acerto de hora automático. O replay assume que ele vem logo depois do LOGIN (também depois de uma reconexão).
 3. Faça um comando de cada vez, esperando o resultado na tela.
-4. Exporte e copie para `fixtures/real/fitgps/<firmware>/<cenário>.jsonl`. Basta isso: `./gradlew :protocol:jvmTest` reproduz o arquivo e imprime a linha `REPLAY` (seção 2); `./gradlew :protocol:allTests` reproduz nos quatro targets, inclusive no simulador iOS.
+4. Exporte e copie para `fixtures/real/<perfil>/<firmware>/<cenário>.jsonl` (`fitgps`, `lifeultragps` ou `condorreebok`; no Condor Reebok, `fixtures/real/condorreebok/MOY-VS02-2.0.0/`). Basta isso: `./gradlew :protocol:jvmTest` reproduz o arquivo e imprime a linha `REPLAY` (seção 2); `./gradlew :protocol:allTests` reproduz nos quatro targets, inclusive no simulador iOS.
 
 **Cuidados com o export**
 - **Os exports são cumulativos.** O recorder guarda tudo desde o último **Clear**, então cada export contém o anterior como prefixo exato (`frames-20261029-082857.jsonl`, 84 linhas, é o começo de `frames-20261029-083254.jsonl`, 851 linhas). Versione só o último export de cada sessão de gravação; dois arquivos com o mesmo começo viram dois testes da mesma conversa. Para um cenário por arquivo, faça **Export** e depois **Clear** entre um cenário e o outro (o Clear apaga o recorder).
 - **Uma exportação tem um cabeçalho só.** O `device` e o `firmware` do cabeçalho são do último relógio que chegou ao handshake (o `CoreBridge` troca o nome quando a sessão chega em `HANDSHAKING` com outro relógio e apaga o firmware até o `onDeviceInfo` do novo; um pedido que nunca conecta ou um link que falha na configuração não mexe em nada, `docs/decisoes.md`, ADR 24). Os pacotes, porém, são todos os gravados desde o último **Clear**: trocar de relógio sem **Export** e **Clear** no meio deixa os pacotes do primeiro sob o cabeçalho do segundo, e o replay os mandaria para a família errada. O `mtu` também não é o do link gravado: os dois hosts leem o MTU atual do transporte na hora do export (no iOS, o transporte volta a 23 a cada tentativa de conexão, mesmo uma que falha). Antes de versionar, confira que o cabeçalho e os pacotes são do mesmo relógio. Até a ADR 24, o nome mudava já no pedido: a primeira gravação do iPhone (`frames-20261030-093133.jsonl`, só pacotes do fitGPS) saiu com `device` `"Life Ultra GPS"` e `firmware` `"0.2.1"`, por causa dos pedidos ao Life Ultra GPS que falharam depois. Ela foi versionada com o `device` corrigido para `Mormaii_fitGPS` e nada mais mudado (`real/fitgps/0.2.1/ios-pair-info-time-steps-sleep-sync.jsonl`, seção 5).
+- **No CRP, o `mtu` do cabeçalho decide o `b2` de todo TX no replay.** O `FakeTransport` responde ao pedido de MTU com o `mtu` do cabeçalho (seção 4), e o driver calcula o bloco a partir dele: 517 dá bloco 244 e `b2 = 0x20`; 23 dá bloco 20 e `b2 = 0x10`. Uma gravação feita num link de 517 e exportada com `mtu` 23 (o transporte já tinha voltado a 23, por exemplo depois de uma tentativa de conexão no iOS) falha no primeiro `5A 00`. Exporte com o link ainda aberto, ou confira o `mtu` contra o `b2` dos TX antes de versionar.
 - **`logs-*.jsonl` nunca entram no repositório.** O log nativo traz o MAC do relógio (scan, `openGatt`, `reconnectIfPaired`). Ele é a fonte do que a fixture não tem (descoberta de serviços, MTU, eventos de Bluetooth) e fica fora do git; os documentos citam o `ts` dele.
 - **Confira o `frames-*.jsonl` antes de versionar**: ele não deve ter MAC. O formato só grava `type`, `dir`, `atMs`, `characteristic` e `hex`, mas um payload poderia carregar o endereço. A conferência da fixture real procurou o MAC do log no arquivo em três formas (com `:`, hex contínuo e hex com os bytes invertidos) e não achou nenhuma.
 
@@ -88,13 +94,42 @@ O script (`scripts/hci2jsonl.py`, só biblioteca padrão, `--help` em português
 
 Uma captura de outro app só reproduz se ele mandou a mesma sequência de frames que esta sessão manda (veja a seção 4). Do Mormaii atual, que faz polling a cada 10 s, ela serve para responder às hipóteses H1–H9 de `protocolo-sma.md` (seção 8), não como teste.
 
+### 3.3 Por btsnoop bruto do Android (`btsnoop2jsonl.py`, fixtures de referência)
+
+Para o CRP, a captura foi lida direto do arquivo btsnoop (H4), sem passar pelo Wireshark, porque as docs precisavam das leituras GATT, do GATT descoberto e da ordem das CCCDs, e a captura tinha dados pessoais que só dá para tirar remontando os frames. O resultado é uma fixture de referência (seção 2; ADR 32).
+
+1. Grave a captura como na seção 3.2 (passos 1 a 3). Guarde o `btsnoop_hci.log.last` e o `btsnoop_hci.log` **fora do repositório**: o btsnoop bruto tem os endereços do relógio e de outros aparelhos e nunca entra no git.
+2. Liste as conexões, de fora da pasta da captura e com `python3 -I`:
+
+```
+python3 -I scripts/btsnoop2jsonl.py --list btsnoop_hci.log.last btsnoop_hci.log
+```
+
+   Cada conexão LE sai com um rótulo `dev-xxxxxx` (o endereço nunca é impresso), o handle, o início e o fim, o papel (`role=central` ou `peripheral`), a contagem de pacotes ATT e os serviços descobertos. O rótulo é o HMAC-SHA256 do endereço com uma chave tirada da própria captura (o SHA-256 do primeiro MiB do primeiro arquivo): sem a captura ele não se reverte, e muda de uma captura para outra, então use os mesmos arquivos, na mesma ordem, no `--list` e na conversão. Mesmo assim o rótulo real não se versiona: os comandos dos docs usam `dev-xxxxxx`, e o `Btsnoop2JsonlTest.noRealDeviceLabelIsVersioned` falha se um rótulo de verdade aparecer nos scripts, docs, fixtures ou fontes.
+3. Converta uma conexão, filtrando pelo rótulo, pelo handle e por uma janela de horário local:
+
+```
+python3 -I scripts/btsnoop2jsonl.py --family crp --peer dev-xxxxxx --conn 11 --since 15:43 --until 15:46:11 \
+	--app "Condor (produção, Android)" btsnoop_hci.log.last btsnoop_hci.log \
+	-o fixtures/reference/condorreebok/MOY-VS02-2.0.0/condor-app-pair-sync.jsonl
+```
+
+O script (`scripts/btsnoop2jsonl.py`, python3 3.9 ou maior, só biblioteca padrão, `--help` em português; as mensagens de erro e o `--list` em inglês, com o prefixo `btsnoop2jsonl:` nos erros, como o `hci2jsonl.py`):
+- **Horário**: o btsnoop guarda o relógio de parede do telefone (`EPOCH_DELTA` entre a época dele e 1970); `--time-zone` (padrão `America/Sao_Paulo`) dá o offset do `recordedAt`, que é o início da janela pedida (ou da conexão).
+- **Mapa de handles** pela descoberta (Read By Group Type, Read By Type `0x2803` → UUID de cada characteristic, Find Information → CCCD). Com `--family crp`: TX = ATT Write Command/Request em `fee2`; RX = Notification/Indication em `fee3`, `fee1`, `2a19` e `2a37`; `READ` = o par Read Request (telefone) / Read Response (relógio) em `2a29`, `2a28`, `2a19` e `fee1`. Todo o resto fica de fora: as escritas de CCCD (que vão só para o `cccdWrites` do cabeçalho), a descoberta, `FEC9`, `FEA1`, `190E`, `AE00`, o Bluetooth clássico e o SMP.
+- **Redação no nível do frame** (`FE EA` remontado nos dois sentidos): todos os pacotes dos frames cujo `cmd` está em `--redact-cmds` (padrão `41,42,43,b5`: texto de notificação, previsão do tempo com as temperaturas de cada dia, clima e localização) são descartados; o payload do frame `0x12` (perfil: altura, peso, idade, sexo) é trocado por `--fake-user-info` (padrão `b24b1800`: 178 cm, 75 kg, 24 anos, masculino, os valores do app de exemplo da SDK), com o cabeçalho do frame refeito. As contagens vão para o `redactions` do cabeçalho.
+- **Trava**: todos os endereços que a captura mostra ficam só na memória: o do telefone (Command Complete do `Read_BD_ADDR`), os pares de LE (Enhanced) Connection Complete (com os RPA), de Connection Complete e Connection Request clássicos, os alvos de Create Connection e de LE (Extended) Create Connection, os de SSP (IO Capability, User Confirmation, Passkey, Simple Pairing Complete), link key e PIN, os de advertising reports (legado, direcionado e estendido), das listas de filtro e de resolução, e o Identity Address do SMP. Se algum aparecer na saída (bytes diretos, invertidos ou como texto com dois-pontos), o script aborta sem escrever nada, e a mensagem não mostra o endereço. Endereços com todos os bytes iguais (o `00:00:…` de uma conexão que falhou) são pulados: não identificam ninguém e casariam com qualquer sequência de zeros.
+- **Cabeçalho**: `device` = o 2A00 lido na captura (ou `--device`), `firmware` = o 2A28 lido (ou `--firmware`), `platform` `android-hci`, `mtu` = o menor dos valores da troca de MTU, mais as chaves extras da seção 1. O rótulo `dev-xxxxxx` nunca vai para a fixture.
+
+**Antes de versionar**, confira com um script avulso (`python3 -I`, fora da pasta da captura) que a saída não tem nenhum frame `0x41`, `0x42`, `0x43` ou `0xB5`, que todo `0x12` é o valor fictício, que só há a conexão escolhida, e que nenhum endereço da captura aparece em nenhuma forma. O `CrpReferenceFixtureTest.redactionRemovedTextFramesAndFakedTheProfile` repete as duas primeiras conferências a cada execução, e o `Btsnoop2JsonlTest` (`jvmTest`, roda o `python3`) monta um btsnoop sintético num diretório temporário, com um endereço inventado só no código do teste, e confere a redação, a leitura de `2a29`, o cabeçalho, a trava contra o endereço do relógio, o do telefone e o de um par clássico, o rótulo com chave e que nenhum rótulo real está versionado (`syntheticCaptureBecomesARedactedReferenceRecording`, `addressInAPacketAbortsWithoutWriting`, `phoneAddressInAPacketAbortsWithoutWriting`, `classicPeerAddressInAPacketAbortsWithoutWriting`, `listNeverPrintsTheAddressAndTheLabelIsKeyedByTheCapture`, `noRealDeviceLabelIsVersioned`).
+
 ## 4. Replay
 
 O `ReplayDriver` (`protocol/src/testKit/.../testing/ReplayDriver.kt`) liga a gravação ao `FakeTransport`:
 
-1. A cada pacote que a sessão escreve, compara com o **próximo TX** da gravação. Se o próximo pacote gravado for RX ou a gravação tiver acabado, é um "TX inesperado".
-2. Depois de cada TX, emite como notificação todos os RX gravados até o TX seguinte. RX antes do primeiro TX saem quando as notificações são ligadas.
-3. No fim, o teste confere que não houve divergência e que nenhum TX gravado ficou sem ser enviado (`problems()`).
+1. Um "pedido" é um TX ou uma leitura. A cada pacote que a sessão escreve, compara com o **próximo pacote** da gravação, que tem de ser TX; se for RX ou `READ`, ou se a gravação tiver acabado, é um "TX inesperado". A cada leitura da sessão (`FakeTransport.onRead`), responde com o próximo pacote, que tem de ser um `READ` da mesma characteristic; senão, divergência e status `NOT_FOUND`.
+2. Depois de cada pedido, emite como notificação todos os RX gravados até o pedido seguinte, cada um na characteristic gravada (`FakeTransport.notifyOn`; no CRP, `fee3`, `fee1`, `2a19` ou `2a37`). Os RX gravados depois de uma leitura saem depois da resposta dela (`FakeTransport.afterRead`), na ordem da gravação. RX antes do primeiro pedido saem quando as notificações são ligadas.
+3. No fim, o teste confere que não houve divergência e que nenhum TX nem `READ` gravado ficou sem ser feito (`problems()`); `recordedReads`/`matchedReads` contam as leituras.
 
 **Modo estrito** (padrão): os bytes do TX precisam ser iguais depois da máscara (`TxMasker`), que zera o que muda legitimamente entre gravação e replay:
 
@@ -129,7 +164,24 @@ Tudo o mais (CRC dos outros frames, cmd, key, tamanho, payload de BIND/LOGIN, or
 
 **MTU.** O `FakeTransport` responde ao pedido de MTU com o `mtu` do cabeçalho da gravação, e não com 247. Num link de 23 a sessão corta o BIND de 45 bytes em 20 + 20 + 5, e só assim os TX batem com uma gravação feita no Android, que negociou 23 com o fitGPS.
 
-Uma gravação real passa quando: nenhuma divergência, todos os TX consumidos, todos os pedidos com terminal de sucesso e estado final `READY` (ou `DISCONNECTED`, se termina com `forget`).
+Uma gravação real passa quando: nenhuma divergência, todos os TX (e `READ`) consumidos, todos os pedidos com terminal de sucesso e estado final `READY` (ou `DISCONNECTED`, se termina com `forget`).
+
+**CRP.** O `runCrpReplay` roda o replay com o perfil Condor Reebok, o `FakeTransport` com a descoberta do P85 (`FakeTransport.crp()`, notificações em `fee3`) e a máscara `CrpTxMasker`: no frame `31` (acerto de hora, `len` `0x0A`) zera os bytes 5 a 8, os segundos que dependem do relógio do replay; o `08` e todos os outros frames, inclusive o fuso `BB 07 00` (que só depende do fuso do cabeçalho), são comparados inteiros. Todo frame da fase 1 cabe num pacote, então a máscara não guarda estado. As ações saem do `CrpReplayScenario.deduce`, pela ordem dos pedidos (frames TX remontados e leituras):
+
+| Pedidos | Ação na sessão |
+|---|---|
+| primeiro `[READ 2a29] 5A/00 [B7/0E BB/16]` | `pair` (o handshake de versão) |
+| o mesmo no meio do arquivo | `pair` depois de um `F8`; senão, Bluetooth desligado e religado seguido de `reconnect`, como no SMA |
+| primeiro `31 BB/07` logo depois de um handshake | nenhuma: é o acerto de hora automático |
+| `31 BB/07` | `setTime` |
+| `READ 2a19` | `readBattery` |
+| `5A/01 [READ 2a28]` | `readDeviceInfo` |
+| `READ fee1 59/00 59/01 59/02 59/03 [33/01]`, seguidos de `32 [33/03 [33/04]]` | `syncHistory([STEPS, SLEEP])`; sem o `32`, `syncHistory([STEPS])` (um `refreshSteps` gera os mesmos bytes) |
+| `32 [33/03 [33/04]]` sozinho | `syncHistory([SLEEP])` |
+| `F8` | `disconnect(forget = true)` |
+| qualquer outro | o teste falha dizendo qual pedido a sessão não sabe fazer |
+
+As fixtures de referência não passam por aqui: a sequência delas é a do app de produção (configurações, `5D`/`5C`, `B2`, `35`, `B9`, `B6`), que o `deduce` recusa.
 
 ### 4.1 Nos quatro targets
 
@@ -170,6 +222,15 @@ O replay da seção 4 roda em tempo virtual, com o construtor interno da `WatchS
 - **Totais esperados** com o perfil do fitGPS (`DAY_CUMULATIVE`, a amostra de mais passos do dia): **27/10 = 7040** (23h) e **28/10 = 4810** (14:20), com as calorias e a distância dessas amostras. A soma das horas (`HOURLY_SUM`, regra do Core de produção) daria 33600 e 26596, 4,8 e 5,5 vezes o total certo; o `SmaSessionReplayTest` confere os dois (`EXPECTED_STEPS` e `EXPECTED_STEPS_IF_HOURLY_SUM` do gerador). Antes da regeneração os passos eram 100, 110, …, 290 com 500 e 777 na página 2, totais 600 e 4007 pela soma das horas.
 - **Sono**: 27/10 23:00 START, 23:30 LIGHT, 28/10 01:00 DEEP, 03:00 LIGHT, 06:30 END; o teste só confere uma sessão com `dayKey` 2026-10-28 (exploratório).
 - **Conferência independente** (refeita em 2026-10-29, depois da regeneração): um script Python avulso, que não usa nada do código Kotlin (CRC-16/ARC próprio, remontagem dos frames pelo L1, decodificação dos registros de 8 bytes e a regra "só mode 0, hora cheia local, vale o último da hora"), leu o arquivo e achou 49 pacotes, 32 frames (16 de dados com CRC certo e 16 ACKs), 23 registros de passos, 20 amostras horárias iguais às da lista acima e os totais 7040 e 4810 pelo maior valor do dia (33600 e 26596 pela soma das horas). A regeneração só mudou os pacotes das duas respostas `05/42` (13 linhas); os frames de BIND, LOGIN e BATTERY continuam idênticos aos vetores dourados de `protocolo-sma.md`, seção 9.
+
+### `synthetic/condorreebok-pair-sync.jsonl`
+
+- **Gerada**, com os bytes do relógio reais: `commonTest/.../testing/SyntheticCondorReebokFixture.kt` monta os TX que o **nosso** driver manda (com o `CrpFrameCodec`, bloco do MTU 517) e copia os RX e READ de `reference/condorreebok/MOY-VS02-2.0.0/condor-app-pair-sync.jsonl` (o `atMs` de origem está em cada constante do gerador; `CrpSyntheticReplayTest.everyRxAndReadComesFromTheReference` confere que cada um existe na referência). O `CrpSessionReplayTest.committedFixtureMatchesTheGenerator` (`jvmTest`) falha se o arquivo divergir do gerador; para regenerar: `FIXTURES_REGENERATE=1 ./gradlew :protocol:jvmTest --tests '*CrpSessionReplayTest*'`.
+- **Cabeçalho**: `P85`, firmware `MOY-VS02-2.0.0`, `platform` `synthetic`, MTU 517, `2026-10-31T15:43:12.209-03:00` (o `recordedAt` da referência), `America/Sao_Paulo`.
+- **Conversa** (24 pacotes: 12 TX, 3 READ, 9 RX): `READ 2a29` (`MOYOUNG-V2`) → TX `5A 00` → RX `5A 00` → TX `B7 0E` → TX `BB 16 00` → RX `F9 01 01 00`; TX `31` (hora automática, com o relógio do replay parado no `recordedAt`: `6A E5 9C 10 08`) e TX `BB 07 00 D0 D5 FF FF`; `READ 2a19` = `32`; TX `5A 01` → RX `5A 01` (`MOY-VS02-2.0.0`); `READ fee1` (zeros) → `59 00` a `59 03`, cada um com a página zerada real → TX `33 01` sem resposta (a sonda do legado) → TX `32` → RX `32` vazio → RX `2a19` `32` (o aviso espontâneo de bateria).
+- **Diferenças em relação ao app de produção**, todas do nosso driver: o `5A 01` sem a leitura de `2a28` (vale a resposta); o `33 01` sondado; nada de `5D`, `5C`, `B2`, `B6`, `35` e `B9`; e o acerto de hora 250 ms depois do READY (o app de produção esperou o vínculo clássico).
+- **Ações deduzidas** (`CrpReplayScenario`): `pair`, `readBattery`, `readDeviceInfo`, `syncHistory([STEPS, SLEEP])`.
+- **Replay**: `24 packets, TX matched 12/12, READ matched 3/3, final state READY` nos quatro targets (`CrpSyntheticReplayTest.pairBatteryFirmwareSyncReplaysStrictly`), com bateria 50 %, firmware `MOY-VS02-2.0.0`, `bleVersion` `MOYOUNG-V2`, nenhum dia de passos (relógio sem uso), nenhuma noite e o `onBattery(-1)` da notificação final. O `strictReplayCatchesAChangedTx` confere que um TX alterado derruba o replay. Com o relógio do replay no `recordedAt`, o `31` bate inteiro; o `shiftedReplayClockIsMaskedOnlyInTheTimeFrame` reproduz a mesma gravação com o `recordedAt` 7 s adiante: o `31` sai com outros segundos (`…6AE59C17 08` contra `…6AE59C10 08`), casa com o `CrpTxMasker` e, sem a máscara, é a única divergência.
 
 ### `tools/sample-wireshark.json` e `tools/sample-wireshark.expected.jsonl`
 
@@ -235,3 +296,24 @@ O replay da seção 4 roda em tempo virtual, com o construtor interno da `WatchS
 - **Conteúdo**: 24 pacotes (12 TX em `0af6`, 12 RX em `0af7`), todos de no máximo 20 bytes.
 - **Conversa**: `pair` com informação básica (bateria 12 %), bind com um desafio novo (`atMs` 118) respondido pelo XOR (`atMs` 119) e a confirmação na tela 1,4 s depois (`atMs` 1528); acerto de hora automático (`atMs` 2547: 2026-10-30 09:35:09, sexta = `04`, fuso `dc 05`); `readDeviceInfo` duas vezes (`1.1.1`); `readBattery`; `setTime` (`atMs` 11869); Refresh steps (`atMs` 15328: 57 passos, 7 kcal, 59 m) e um Sync com o mesmo total (`atMs` 18299). Depois do último pacote, o Sono do app respondeu `NO_DATA` (log, ts 1793363728430), como previsto (sem sono no iDO da PoC).
 - **Replay**: `24 packets, TX matched 12/12, final state READY` nos quatro targets; o `IdoRealFixturesReplayTest.iosRecordingGivesTheValuesTheWatchSent` confere também firmware `1.1.1`, bateria 12 %, 57 passos, 7 kcal e 59 m no dia, as escritas sem resposta e o fuso dos dois acertos de hora. O que o iPhone mostrou do GATT está em `protocolo-ido.md`, seção 1.1.
+
+### `reference/condorreebok/MOY-VS02-2.0.0/` (as três fixtures de referência)
+
+- **Origem**: uma captura HCI (btsnoop) do app Condor de **produção** num Android, pareando o Condor Reebok (`P85`, firmware `MOY-VS02-2.0.0`) em 2026-10-31, horários locais de São Paulo. A captura bruta tem os endereços dos aparelhos e conexões de outro relógio (15:30-15:34) e **nunca entra no repositório**; só a conexão do P85 a partir das 15:42 foi convertida. Não reproduzem contra a nossa sessão (a sequência é a do app de produção): servem de prova do que o relógio responde, e as docs as citam por arquivo e `atMs` (`protocolo-crp.md`, seção 1; ADR 32).
+- **Comando** (da raiz do repositório, com os dois arquivos btsnoop fora dele e em `python3 -I`), igual para as três, mais as opções de cada uma; `dev-xxxxxx` é o rótulo do P85 que o `--list` mostra (seção 3.3):
+
+```
+python3 -I scripts/btsnoop2jsonl.py --family crp --peer dev-xxxxxx --app "Condor (produção, Android)" \
+	btsnoop_hci.log.last btsnoop_hci.log -o fixtures/reference/condorreebok/MOY-VS02-2.0.0/<arquivo>
+```
+
+| Arquivo | Opções | Conexão | `recordedAt` | Pacotes |
+|---|---|---|---|---|
+| `condor-app-pair-sync.jsonl` | `--conn 11 --since 15:43 --until 15:46:11` | 11, 15:43:12.209 a 15:46:10.358 (o primeiro pareamento, até o Bluetooth desligado) | `2026-10-31T15:43:12.209-03:00` | 114: 61 TX, 49 RX, 4 READ |
+| `condor-app-bt-reconnect.jsonl` | `--conn 16 --since 15:46:26 --until 15:47:09` | 16, 15:46:26.727 a 15:47:08.707 (a reconexão depois de religar o Bluetooth) | `2026-10-31T15:46:26.727-03:00` | 25: 15 TX, 8 RX, 2 READ |
+| `condor-app-reconnect-sync-walk.jsonl` | `--conn 17 --since 15:47:21` | 17, de 15:47:21.326 ao fim da captura (reconexão, sync e uma atividade de caminhada) | `2026-10-31T15:47:21.326-03:00` | 244: 150 TX, 89 RX, 5 READ |
+
+- **Cabeçalho**: `device` `P85` (o 2A00 lido), `firmware` `MOY-VS02-2.0.0` (o 2A28 lido), `platform` `android-hci`, `mtu` 517, `mtuInitiator` `"peripheral"` (o relógio abriu a troca), `gatt` com os nove serviços e as propriedades de cada characteristic (a tabela de `protocolo-crp.md`, seção 2), `cccdWrites` `fee3`, `2a37`, `fee1` (nesta ordem, nas três) e `redactions`.
+- **Redação** (o `redactions` de cada uma): frames `0x41`, `0x42`, `0x43` e `0xB5` descartados inteiros, 5 no TX em `condor-app-pair-sync.jsonl`, 2 em `condor-app-bt-reconnect.jsonl` e 11 em `condor-app-reconnect-sync-walk.jsonl`, nenhum no RX; o payload do `0x12` trocado por `B2 4B 18 00` em 2, 0 e 1 frames. Os `0x42` (previsão do tempo: código do clima e temperaturas mínima e máxima por dia, `sdk:f/a2.java:23-45`, sem nome de localização, mas a previsão do dia cruzada com dados públicos indica a cidade) ficaram na primeira versão e saíram na revisão de privacidade, quando as três foram geradas de novo com o padrão atual: só as três linhas `0x42` (`pair-sync@79960`, `walk@25410`, `walk@28370`) e o texto do `redactions` mudaram.
+- **Conferência**: um script avulso (`python3 -I`) e o `CrpReferenceFixtureTest.redactionRemovedTextFramesAndFakedTheProfile` conferiram que não há frame `0x41`, `0x42`, `0x43` nem `0xB5` e que todo `0x12` é `B2 4B 18 00`; nenhum endereço real da captura aparece em nenhuma forma nos arquivos (a única coincidência foi o endereço `00:00:…` de uma conexão que falhou, que não identifica ninguém e que a trava do script pula). Na geração atual, a trava conferiu os 59 endereços distintos que a captura mostra (telefone, pares LE e clássicos, SSP, advertising reports).
+- **O que cada uma prova** (`protocolo-crp.md`): o handshake de versão (`2a29` e `5A 00`, nas três, com `5A 00` em `b2 = 0x10` em `walk@1196`), a hora e o fuso (`pair-sync@6821`, `@7047`), o `F9` do clássico (`pair-sync@3172`, `@7070`; `bt-reconnect@924`, `@1379`), o firmware (`pair-sync@98758`, `@98835`), a bateria lida e notificada sem CCCD (`pair-sync@105394`, `@48921`), as páginas `59` zeradas de um relógio sem uso, o `32` vazio, os `5D`/`5C`/`B6` sem resposta, o `postLoginDelayMs` (`bt-reconnect@2046` → `@2295`) e os passos ao vivo da caminhada, de 16/13/1 a 77/63/4 (`walk@106148` a `@136148`), com a frequência cardíaca em `2a37` (`walk@116988`). O `CrpReferenceFixtureTest` decodifica as três (seção 2).

@@ -46,8 +46,19 @@ import kotlinx.datetime.TimeZone
  * **Threads.** Os métodos JS vêm da thread dos módulos nativos do React Native; os callbacks da sessão, da thread
  * (lógica) da sessão; [onScannedDevice], [onScanFailed] e os ganchos de Bluetooth, da principal ou da do Bluetooth;
  * [onLogEntry], de qualquer uma. O estado compartilhado é pequeno: a fila de eventos e os pedidos em andamento são
- * travados ([PendingEvents], [RequestRegistry]), e os dois sinalizadores (o "usuário desconectou" e o sync em
- * andamento) são `@Volatile`, como no host antigo. Nenhum método bloqueia esperando o relógio.
+ * travados ([PendingEvents], [RequestRegistry]), os dois sinalizadores (o "usuário desconectou" e o sync em
+ * andamento) são `@Volatile`, como no host antigo, e o estado do vínculo Bluetooth clássico (pedido em andamento,
+ * endereços recusados, pedidos abandonados por um `forgetDevice`, alvos do `forgetDevice`) fica sob uma trava própria. Nenhum método bloqueia esperando o relógio.
+ *
+ * **Vínculo Bluetooth clássico.** Um perfil com `Quirks.classicBond` (o Condor Reebok, que usa HFP e A2DP) precisa do
+ * vínculo BR/EDR do sistema, que o BLE não cria. No `READY` que fecha um handshake (não no do fim de um sync), depois de
+ * gravar o pareamento, o controlador pergunta ao host se o vínculo existe ([CoreHost.hasClassicBond]) e, se não, pede
+ * ([CoreHost.requestClassicBond]); o resultado volta por [onClassicBondResult]. Uma falha vira `onError`
+ * `CLASSIC_BOND_FAILED` (`requestId` `-1`, `method` `"classicBond"`); falha e "não suportado" (iOS) não são pedidos de
+ * novo até o próximo [pairDevice]. O [forgetDevice] desses perfis manda o relógio desvincular, depois o host remove o
+ * vínculo ([CoreHost.removeClassicBond]) e só então o pareamento salvo é apagado de novo; um pedido de vínculo ainda em
+ * andamento é abandonado nessa hora, e o resultado dele só vai para o log. Para os outros perfis nenhum desses métodos
+ * do host é chamado.
  */
 public class CoreBridge internal constructor(
 	private val session: WatchSession,
@@ -82,6 +93,31 @@ public class CoreBridge internal constructor(
 	/** `requestId` do sync em andamento enquanto o trabalho em segundo plano ([CoreHost.startSyncWork]) está ligado. */
 	@Volatile
 	private var activeSyncRequestId: Int? = null
+
+	/**
+	 * Trava do estado do vínculo clássico: [classicBondInFlight], [classicBondDeclined], [classicBondAbandoned] e
+	 * [forgetTargets].
+	 */
+	private val classicBondLock: BridgeLock = newReentrantLock()
+
+	/** Endereço com pedido de vínculo clássico em andamento no host ([CoreHost.requestClassicBond]); `null` sem pedido. */
+	private var classicBondInFlight: String? = null
+
+	/**
+	 * Endereços cujo vínculo clássico falhou ou não é suportado nesta execução: não são pedidos de novo até o próximo
+	 * [pairDevice] do mesmo endereço. Evita o laço de diálogos do Core de produção, que pedia de novo a cada recusa.
+	 */
+	private val classicBondDeclined: MutableSet<String> = mutableSetOf()
+
+	/** `requestId` de um [forgetDevice] de perfil com `Quirks.classicBond` → endereço cujo vínculo o host remove no fim. */
+	private val forgetTargets: MutableMap<Int, String> = mutableMapOf()
+
+	/**
+	 * Endereços cujo pedido de vínculo ainda estava em andamento quando o [forgetDevice] terminou: o pedido deixa de
+	 * contar como em andamento ali, e o resultado que o host ainda manda (no Android, a falha do pedido cancelado pela
+	 * remoção) só vai para o log, sem `onError` nem recusa, porque o relógio já foi esquecido.
+	 */
+	private val classicBondAbandoned: MutableSet<String> = mutableSetOf()
 
 	/**
 	 * O listener ligado à sessão. `internal` só para os testes chamarem um callback direto: com a sessão de hoje, alguns
@@ -184,6 +220,42 @@ public class CoreBridge internal constructor(
 		)
 	}
 
+	/**
+	 * Resultado de um [CoreHost.requestClassicBond]: o pedido deixa de estar em andamento e, conforme [result],
+	 * - [ClassicBondResult.BONDED]: só um INFO;
+	 * - [ClassicBondResult.FAILED]: [address] não é pedido de novo até o próximo [pairDevice], e sai `onError` com
+	 *   `CLASSIC_BOND_FAILED`, [message], `requestId` `-1` e `method` `"classicBond"` (não há Promise: o pedido nasce no
+	 *   `READY`);
+	 * - [ClassicBondResult.UNSUPPORTED]: [address] também não é pedido de novo até o próximo [pairDevice], e só sai um
+	 *   WARN com [message] (no iOS, a dica de parear em Ajustes), sem `onError`.
+	 *
+	 * O resultado de um pedido que um [forgetDevice] abandonou (o relógio foi esquecido com o pedido em andamento) só vai
+	 * para o log: nem `onError`, nem recusa, nem mexe no pedido em andamento seguinte.
+	 *
+	 * Pode ser chamado de qualquer thread, inclusive de dentro do [CoreHost.requestClassicBond].
+	 */
+	public fun onClassicBondResult(address: String, result: ClassicBondResult, message: String) {
+		val abandoned = classicBondLock.withLock {
+			if (classicBondAbandoned.remove(address)) {
+				true
+			} else {
+				classicBondInFlight = null
+				if (result != ClassicBondResult.BONDED) classicBondDeclined += address
+				false
+			}
+		}
+		if (abandoned) {
+			log(LogLevel.INFO, METHOD_CLASSIC_BOND, "Classic bond result for forgotten $address ignored: $result ($message)")
+			return
+		}
+		when (result) {
+			ClassicBondResult.BONDED -> log(LogLevel.INFO, METHOD_CLASSIC_BOND, "Classic bond with $address ready: $message")
+			ClassicBondResult.FAILED ->
+				emitError(WatchSession.NO_REQUEST_ID, HostErrorCodes.CLASSIC_BOND_FAILED, message, METHOD_CLASSIC_BOND)
+			ClassicBondResult.UNSUPPORTED -> log(LogLevel.WARN, METHOD_CLASSIC_BOND, message)
+		}
+	}
+
 	// endregion
 
 	// region Inicialização
@@ -236,15 +308,20 @@ public class CoreBridge internal constructor(
 	 * código da sessão (inclusive `PAIRING_REMOVED`, que o JS mostra como "esqueça o relógio nos ajustes de Bluetooth").
 	 * O nome do relógio só vai para o cabeçalho da gravação quando a tentativa chega ao handshake (o listener, em
 	 * `HANDSHAKING`), e não aqui: uma tentativa que falha antes não gravou pacote e não pode renomear a gravação de outro
-	 * relógio.
+	 * relógio. Um vínculo clássico que falhou ou não é suportado para [deviceId] volta a ser pedido no próximo `READY`
+	 * ([onClassicBondResult]).
 	 *
-	 * @param name `appName` (`"fitGPS"`, `"Life Ultra GPS"`: o que o app Mormaii manda), nome BLE (`"Mormaii_fitGPS"`,
-	 * `"Smart Watch 6010"`) ou `id` do perfil.
+	 * @param name `appName` (`"fitGPS"`, `"Life Ultra GPS"`, `"Condor Reebok"`: o que o app manda), nome BLE
+	 * (`"Mormaii_fitGPS"`, `"Smart Watch 6010"`, `"P85"`, inclusive com sufixo, como `"P85-1234"`) ou `id` do perfil.
 	 */
 	public fun pairDevice(deviceId: String, name: String, completion: CoreCompletion) {
 		val profile = checkConnectTarget(METHOD_PAIR, deviceId, name, completion) ?: return
 		host.stopScan()
 		userDisconnected = false
+		classicBondLock.withLock {
+			classicBondDeclined.remove(deviceId)
+			classicBondAbandoned.remove(deviceId)
+		}
 		val requestId = requests.register(METHOD_PAIR, completion)
 		session.pair(requestId, deviceId, profile.id)
 	}
@@ -266,7 +343,8 @@ public class CoreBridge internal constructor(
 
 	/**
 	 * `disconnectCurrentDevice()`: marca "usuário desconectou" (a reconexão automática para) e pede
-	 * `WatchSession.disconnect(forget = false)`. Resolve com `null` quando a sessão conclui.
+	 * `WatchSession.disconnect(forget = false)`. Resolve com `null` quando a sessão conclui. Não mexe no vínculo
+	 * Bluetooth clássico: só o [forgetDevice] o remove.
 	 */
 	public fun disconnectCurrentDevice(completion: CoreCompletion) {
 		userDisconnected = true
@@ -277,11 +355,19 @@ public class CoreBridge internal constructor(
 	 * `forgetDevice()`: marca "usuário desconectou", apaga o relógio salvo e pede `WatchSession.disconnect(forget =
 	 * true)` (UNBIND e store apagado). Quando a sessão conclui, apaga o salvo **de novo**, se o usuário não pediu outro
 	 * pareamento no meio (cobre um `READY` que tenha gravado entre o pedido e o disconnect), e resolve com `null`.
+	 *
+	 * Num perfil com `Quirks.classicBond`, o endereço (o da sessão ou, sem ele, o do pareamento salvo, lido antes de ser
+	 * apagado) é guardado com o pedido. No fim da sessão (`onCompleted` ou `onError`), a ordem é: o relógio já recebeu o
+	 * pedido de desvincular (o `F8` do CRP), o host remove o vínculo clássico ([CoreHost.removeClassicBond]), o salvo é
+	 * apagado de novo e a Promise é liquidada.
 	 */
 	public fun forgetDevice(completion: CoreCompletion) {
 		userDisconnected = true
+		val classicTarget = classicBondTarget()
 		host.clearPairing()
-		session.disconnect(requests.register(METHOD_FORGET, completion), true)
+		val requestId = requests.register(METHOD_FORGET, completion)
+		if (classicTarget != null) classicBondLock.withLock { forgetTargets[requestId] = classicTarget }
+		session.disconnect(requestId, true)
 	}
 
 	/** `isConnected()`: resolve com `true` em `READY` ou `SYNCING` ([StateMapper.isConnected]). Não fala com o relógio. */
@@ -486,16 +572,49 @@ public class CoreBridge internal constructor(
 
 	/**
 	 * Perfil a partir do nome que o JS passa em `pairDevice(deviceId, name)`: aceita o `appName` (`"fitGPS"`, o que o
-	 * app Mormaii manda hoje, `AvailableDevices.java:21-23` do Core atual; `"Life Ultra GPS"` no iDO), o nome BLE
-	 * (`"Mormaii_fitGPS"`, `"Life Ultra GPS"`, `"Smart Watch 6010"`) e o `id`.
+	 * app Mormaii manda hoje, `AvailableDevices.java:21-23` do Core atual; `"Life Ultra GPS"` no iDO; `"Condor Reebok"`
+	 * no CRP), o nome BLE (`"Mormaii_fitGPS"`, `"Life Ultra GPS"`, `"Smart Watch 6010"`, `"P85"`) e o `id`. Por último,
+	 * o nome de scan como o `DeviceRegistry.identify` o lê (com `trim` e os prefixos de `DeviceProfile.bleNamePrefixes`):
+	 * `"P85-1234"` é o Condor Reebok, como no `startsWith` do Core atual (`AvailableDevices.java:55-57`).
 	 */
 	internal fun resolveProfile(name: String): DeviceProfile? =
 		Profiles.all.firstOrNull { profile -> name == profile.appName || name == profile.id || name in profile.bleNames }
+			?: DeviceRegistry.identify(name, emptyList())
 
 	/** Dias de sono pedidos à sessão em `getHistorySleep` (o spec não tem parâmetro): a retenção do perfil. */
 	internal fun sleepHistoryDays(): Int {
 		val profileId = session.currentProfileId ?: host.loadPairing()?.profileId
 		return profileId?.let(DeviceRegistry::byId)?.quirks?.historyRetentionDays ?: DEFAULT_HISTORY_DAYS
+	}
+
+	/**
+	 * No `READY` que fecha um handshake (thread da sessão, depois de gravar o pareamento; o `READY` do fim de um sync não
+	 * chama: o vínculo não muda no meio da conexão, e cada sync faria uma consulta ao sistema e um INFO): pede ao host o
+	 * vínculo Bluetooth clássico do relógio da sessão, se o perfil tem `Quirks.classicBond` e o sistema ainda não o tem.
+	 * Sai sem chamar o host quando o perfil
+	 * não tem o quirk (SMA e iDO: nenhum método de vínculo do host é chamado), o usuário desconectou, a sessão não tem
+	 * endereço, já há um pedido em andamento ou o endereço falhou ou não é suportado nesta execução (até o próximo
+	 * [pairDevice]). Com o vínculo já no sistema ([CoreHost.hasClassicBond]), só um INFO. Senão marca o pedido em
+	 * andamento **antes** de chamar o host, porque o resultado pode voltar de dentro da própria chamada.
+	 *
+	 * @return `true` se pediu o vínculo ao host.
+	 */
+	internal fun requestClassicBondIfNeeded(): Boolean {
+		val profile = session.currentProfileId?.let(DeviceRegistry::byId) ?: return false
+		if (!profile.quirks.classicBond || userDisconnected) return false
+		val address = session.currentAddress ?: return false
+		if (!canRequestClassicBond(address)) return false
+		if (host.hasClassicBond(address)) {
+			log(LogLevel.INFO, METHOD_CLASSIC_BOND, "Classic bond with $address already exists")
+			return false
+		}
+		val claimed = classicBondLock.withLock {
+			canRequestClassicBond(address).also { allowed -> if (allowed) classicBondInFlight = address }
+		}
+		if (!claimed) return false
+		log(LogLevel.INFO, METHOD_CLASSIC_BOND, "Requesting classic bond with $address")
+		host.requestClassicBond(address)
+		return true
 	}
 
 	/**
@@ -574,6 +693,27 @@ public class CoreBridge internal constructor(
 	/** O que o host antigo punha na rejeição: a mensagem da exceção ou, sem mensagem, o nome simples da classe. */
 	private fun describe(error: Throwable): String = error.message ?: error::class.simpleName ?: ""
 
+	/** `true` se não há pedido de vínculo clássico em andamento e [address] não foi recusado nesta execução. */
+	private fun canRequestClassicBond(address: String): Boolean = classicBondLock.withLock {
+		classicBondInFlight == null && address !in classicBondDeclined
+	}
+
+	/**
+	 * Endereço cujo vínculo clássico o [forgetDevice] remove no fim: o da sessão (com o perfil da sessão) ou, sem ele, o
+	 * do pareamento salvo (com o perfil salvo), se o perfil tem `Quirks.classicBond`; senão `null`.
+	 */
+	private fun classicBondTarget(): String? {
+		val sessionAddress = session.currentAddress
+		val (address, profileId) = if (sessionAddress != null) {
+			sessionAddress to session.currentProfileId
+		} else {
+			val saved = host.loadPairing() ?: return null
+			saved.address to saved.profileId
+		}
+		val profile = profileId?.let(DeviceRegistry::byId) ?: return null
+		return address.takeIf { profile.quirks.classicBond }
+	}
+
 	/**
 	 * Um item do `deletedSavedData`: a string pura (`TechnosWareCore/src/NativeModules/index.ts:763-768`) ou o mapa do
 	 * spec. Devolve `(categoria, registered_at)`, ou `null` para um item que não dá para ler.
@@ -614,11 +754,19 @@ public class CoreBridge internal constructor(
 		/** `perfil/endereço` do relógio que o cabeçalho da gravação nomeia; `null` até o primeiro handshake. Só a thread da sessão usa. */
 		private var recordedWatch: String? = null
 
+		/** Estado anterior ao callback atual (o `READY` de um handshake vem de `HANDSHAKING`). Só a thread da sessão usa. */
+		private var previousState: ConnectionState? = null
+
 		override fun onStateChanged(state: ConnectionState, phase: String?) {
 			log(LogLevel.INFO, "onStateChanged", "state=$state phase=$phase")
+			val previous = previousState
+			previousState = state
 			// Depois de um disconnect/forget do usuário não grava: um handshake que chega a READY entre o forgetDevice e a
 			// sessão processar o disconnect regravaria o relógio esquecido, e o próximo processo reconectaria a ele.
-			if (state == ConnectionState.READY && !userDisconnected) savePairing()
+			if (state == ConnectionState.READY) {
+				if (!userDisconnected) savePairing()
+				if (previous == ConnectionState.HANDSHAKING) requestClassicBondIfNeeded()
+			}
 			if (state != ConnectionState.READY && state != ConnectionState.SYNCING) stopSyncWork("state=$state")
 			if (state == ConnectionState.HANDSHAKING) recordLinkedWatch()
 			emit("onConnectStateChanged", EventMapper.connectStateChanged(state, phase))
@@ -668,6 +816,7 @@ public class CoreBridge internal constructor(
 
 		override fun onCompleted(requestId: Int) {
 			val entry = requests.take(requestId)
+			removeForgottenClassicBond(requestId)
 			if (entry?.method == METHOD_FORGET) clearForgottenPairing()
 			entry?.token?.resolve(null)
 		}
@@ -675,6 +824,7 @@ public class CoreBridge internal constructor(
 		override fun onError(requestId: Int, code: String, message: String) {
 			if (activeSyncRequestId == requestId) stopSyncWork("sync error $code")
 			val entry = requests.take(requestId)
+			removeForgottenClassicBond(requestId)
 			if (entry?.method == METHOD_FORGET) clearForgottenPairing()
 			emitError(requestId, code, message, entry?.method)
 			entry?.token?.reject(code, message)
@@ -717,6 +867,30 @@ public class CoreBridge internal constructor(
 		}
 
 		/**
+		 * Fim do `forgetDevice` de um perfil com `Quirks.classicBond` (sucesso ou erro): o host remove o vínculo clássico
+		 * guardado com o pedido. A sessão já mandou o pedido de desvincular ao relógio (o `F8` do CRP), e o pareamento
+		 * ainda vai ser apagado de novo ([clearForgottenPairing]). Não depende da completion: um `invalidate` no meio
+		 * (reload do JS) não impede a remoção.
+		 */
+		private fun removeForgottenClassicBond(requestId: Int) {
+			val (address, abandoned) = classicBondLock.withLock {
+				forgetTargets.remove(requestId)?.let { target ->
+					// Um pedido de vínculo em andamento para o relógio esquecido é abandonado aqui, antes da remoção: o host
+					// o encerra (Android) e o resultado que vier depois só vai para o log (onClassicBondResult).
+					val inFlight = classicBondInFlight == target
+					if (inFlight) {
+						classicBondInFlight = null
+						classicBondAbandoned += target
+					}
+					target to inFlight
+				}
+			} ?: return
+			if (abandoned) log(LogLevel.INFO, METHOD_CLASSIC_BOND, "Classic bond request for $address abandoned: the watch was forgotten")
+			log(LogLevel.INFO, METHOD_CLASSIC_BOND, "Removing classic bond with $address")
+			host.removeClassicBond(address)
+		}
+
+		/**
 		 * Fim do `forgetDevice`: apaga o pareamento de novo, agora que a sessão já processou o disconnect. O
 		 * [forgetDevice] já apagou ao receber o pedido; esta segunda vez cobre um `READY` que tenha gravado no meio. Se o
 		 * usuário já pediu outro pareamento ([userDisconnected] voltou a `false`), o que está salvo é o novo e fica.
@@ -750,5 +924,8 @@ public class CoreBridge internal constructor(
 		const val METHOD_HISTORY_SLEEP = "getHistorySleep"
 		const val METHOD_DELETED_SAVED_DATA = "deletedSavedData"
 		const val METHOD_EXPORT_LOGS = "exportLogs"
+
+		/** `method` do `onError` `CLASSIC_BOND_FAILED` e tag do log do vínculo clássico (não é método JS). */
+		const val METHOD_CLASSIC_BOND = "classicBond"
 	}
 }

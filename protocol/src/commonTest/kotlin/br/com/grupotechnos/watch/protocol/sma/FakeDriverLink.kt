@@ -2,6 +2,7 @@ package br.com.grupotechnos.watch.protocol.sma
 
 import br.com.grupotechnos.watch.protocol.domain.WatchErrorCodes
 import br.com.grupotechnos.watch.protocol.domain.WatchException
+import br.com.grupotechnos.watch.protocol.driver.CharacteristicNotification
 import br.com.grupotechnos.watch.protocol.driver.DriverLink
 import br.com.grupotechnos.watch.protocol.log.FrameDirection
 import br.com.grupotechnos.watch.protocol.log.LogLevel
@@ -70,6 +71,10 @@ internal class FakeDriverLink(
 	private val channel = Channel<ByteArray>(Channel.UNLIMITED)
 
 	override val notifications: ReceiveChannel<ByteArray> = channel
+
+	/** O SMA não tem `sideNotify`: canal já fechado. */
+	override val sideNotifications: ReceiveChannel<CharacteristicNotification> =
+		Channel<CharacteristicNotification>().also { it.close() }
 
 	/** Todos os pacotes escritos pelo driver, na ordem em que a escrita terminou. */
 	val writes = mutableListOf<ByteArray>()

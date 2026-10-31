@@ -24,7 +24,7 @@ internal data class RecordingHeader(
 		get() = Instant.parse(recordedAt).toEpochMilliseconds()
 }
 
-/** Um pacote GATT cru gravado (um fragmento, não um frame remontado). */
+/** Um pacote GATT cru gravado (um fragmento, não um frame remontado), ou o valor de uma leitura ([FrameDirection.READ]). */
 internal class RecordedPacket(
 	val direction: FrameDirection,
 	val atMs: Long,

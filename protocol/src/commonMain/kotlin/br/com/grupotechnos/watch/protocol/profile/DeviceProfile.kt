@@ -12,7 +12,25 @@ public enum class Family {
 	 * sem CRC (`docs/protocolo-ido.md`).
 	 */
 	IDO,
+
+	/**
+	 * Relógios Moyoung (SDK `crpblelib`). Na Condor: Condor Reebok (P85). Frames `FE EA` sem CRC no serviço `FEEA`, com
+	 * bateria, versão e passos do dia em characteristics GATT próprias (`docs/protocolo-crp.md`).
+	 */
+	CRP,
 }
+
+/**
+ * Uma characteristic de notificação de qualquer serviço, que a sessão entrega ao driver com a origem, fora do canal de
+ * frames (ver [GattCandidate.sideNotify]).
+ *
+ * @property service serviço GATT da characteristic, em 128 bits e minúsculas.
+ * @property characteristic characteristic de notificação, em 128 bits e minúsculas.
+ */
+public data class NotifyChannel(
+	val service: String,
+	val characteristic: String,
+)
 
 /**
  * Um conjunto serviço + characteristics que o driver sabe usar.
@@ -24,15 +42,22 @@ public enum class Family {
  * @property write characteristic onde a sessão escreve os frames.
  * @property notify characteristic de onde vêm as notificações do relógio.
  * @property extraNotify outras characteristics de notificação do mesmo serviço, ligadas em ordem depois de [notify] e
- * antes do handshake; as notificações delas também chegam ao driver. Vazio no SMA. No iDO é a de saúde (`0af2`), que
- * a SDK liga logo depois da normal (`docs/protocolo-ido.md`, seção 1). Uma que não apareça na descoberta é pulada,
- * com aviso no log.
+ * antes do handshake; as notificações delas chegam ao driver no canal de frames, junto com as de [notify]. Vazio no SMA
+ * e no CRP. No iDO é a de saúde (`0af2`), que a SDK liga logo depois da normal (`docs/protocolo-ido.md`, seção 1). Uma
+ * que não apareça na descoberta é pulada, com aviso no log.
+ * @property sideNotify notificações fora do canal de frames, em qualquer serviço, ligadas depois de [notify] e
+ * [extraNotify], uma de cada vez, nesta ordem. O driver as recebe num canal à parte, com a characteristic de origem. A
+ * falha de uma delas não é fatal (aviso no log e a sessão segue), e uma que não apareça na descoberta é pulada. Vazio no
+ * SMA e no iDO. No CRP: `2a37` (frequência cardíaca), `fee1` (passos do dia) e `2a19` (bateria), na ordem da captura do
+ * app de produção (`fixtures/reference/condorreebok/MOY-VS02-2.0.0/condor-app-pair-sync.jsonl`) mais o `2a19`, que a SDK
+ * só assina em `subscribeDeviceBattery` (`sdk:h/a.java:423-429`).
  */
 public data class GattCandidate(
 	val service: String,
 	val write: String,
 	val notify: String,
 	val extraNotify: List<String> = emptyList(),
+	val sideNotify: List<NotifyChannel> = emptyList(),
 )
 
 /**
@@ -51,10 +76,11 @@ public enum class BindPayloadKind {
  */
 public enum class StepsAggregation {
 	/**
-	 * Cada amostra é o total de uma hora; o total do dia é a soma das horas, das calorias e da distância.
+	 * Cada amostra é o total do seu intervalo (hora no SMA de produção; meia hora no CRP, mais uma amostra de totais do
+	 * dia); o total do dia é a soma dos passos, das calorias e da distância das amostras.
 	 * É o que os dois Cores atuais fazem em produção com o fitGPS (`SMAService.getHistoryPedometer`), o que conta a
-	 * mais quando o relógio entrega o acumulado do dia (`docs/decisoes.md`, ADR 1). Fica para um relógio cujo contador
-	 * zere a cada hora.
+	 * mais quando o relógio entrega o acumulado do dia (`docs/decisoes.md`, ADR 1). É o do Condor Reebok, cujo
+	 * histórico `0x59` dá os passos de cada meia hora.
 	 */
 	HOURLY_SUM,
 
@@ -68,12 +94,14 @@ public enum class StepsAggregation {
 /**
  * Ajustes de comportamento por modelo. São dados, não código: o mesmo driver serve modelos com quirks diferentes.
  *
- * [fragmentGapTimeoutMs], [bindPayload] e [bindUserId] são só do SMA; o driver iDO os ignora.
+ * [fragmentGapTimeoutMs], [bindPayload] e [bindUserId] são só do SMA; o driver iDO os ignora. O CRP usa
+ * [fragmentGapTimeoutMs] na remontagem e ignora [bindPayload] e [bindUserId] (não há vínculo de aplicação).
  *
  * @property requestMtu MTU ATT pedido depois de habilitar notificações. Até 23 (o MTU padrão), a sessão não pede MTU e
  * usa 23: é o caso do iDO, cuja SDK nunca pede (`docs/protocolo-ido.md`, seção 1).
  * @property maxFragment tamanho máximo de cada escrita; `null` usa `MTU - 3`. Nunca abaixo de 20. O iDO não fragmenta:
- * todo frame legado cabe em 20 bytes.
+ * todo frame legado cabe em 20 bytes. No CRP o driver aplica a regra da SDK, `min(MTU, 250) − 3` arredondado para baixo
+ * a múltiplo de 4 (`sdk:l/a.java:51-57`), e ignora este campo.
  * @property connectTimeoutMs tempo máximo para abrir o link no primeiro pareamento (a reconexão não tem timeout).
  * @property commandTimeoutMs tempo máximo de espera por ACK e por resposta de cada comando. A sessão usa o mesmo
  * valor para esperar a habilitação das notificações e o UNBIND do `disconnect(forget = true)`.
@@ -87,6 +115,13 @@ public enum class StepsAggregation {
  * @property historyRetentionDays quantos dias de amostras a sessão mantém no `SampleStore`. A poda depois de cada
  * sync usa esta janela, e a mescla de passos já descarta amostras mais velhas que ela ou do futuro (dia depois de
  * hoje e mais de 3 h à frente de agora).
+ * @property commandGapMs espera mínima depois de cada frame escrito. O CRP usa 200 ms, o atraso padrão da fila da SDK
+ * (`sdk:m/f.java:114-116`; a tabela por comando está em `sdk:m/f.java:94-130`). O SMA e o iDO ignoram.
+ * @property classicBond o relógio usa Bluetooth clássico (HFP/A2DP) no mesmo endereço, e o `CoreBridge` pede o vínculo
+ * BR/EDR ao host depois do READY. É o caso do Condor Reebok (`core@v4.3.57:android/src/main/java/com/crp/bluetooth/
+ * connectionmanager/CRPBleConnectHelper.java:664-668`).
+ * @property iosTransportBridging no iOS, conectar com `CBConnectPeripheralOptionEnableTransportBridgingKey`, como a SDK
+ * iOS da CRP faz no iOS 13 ou maior (literal em `iOS-bin 0xb2e60`; fase 0, CON-17).
  */
 public data class Quirks(
 	val requestMtu: Int,
@@ -100,18 +135,25 @@ public data class Quirks(
 	val bindUserId: Int,
 	val stepsAggregation: StepsAggregation,
 	val historyRetentionDays: Int,
+	val commandGapMs: Long = 0,
+	val classicBond: Boolean = false,
+	val iosTransportBridging: Boolean = false,
 )
 
 /**
  * Tudo o que o sistema sabe sobre um modelo de relógio.
  *
  * @property id identificador estável usado pelo host e pelo JavaScript (ex.: `"fitgps"`, `"lifeultragps"`).
- * @property bleNames nomes de advertising que identificam o modelo, comparados de forma exata.
+ * @property bleNames nomes de advertising que identificam o modelo, comparados de forma exata (depois de `trim`). O
+ * primeiro é o nome real do modelo, usado em `DeviceInfo.bleName` e no cabeçalho das gravações.
  * @property appName nome que o app Mormaii espera em `onScannedDevice` (ex.: `"fitGPS"`).
  * @property slug identificador do modelo no backend (`SMART_WATCH_SLUG` no app).
  * @property family família de protocolo; decide qual driver interno a sessão usa.
  * @property gattCandidates serviços que o driver sabe usar, em ordem de prioridade.
  * @property quirks ajustes de comportamento do modelo (timeouts, MTU, payload do BIND, agregação, retenção).
+ * @property bleNamePrefixes prefixos de nome aceitos no scan, comparados depois de `trim`. O Core de produção aceita
+ * qualquer nome que comece com `P85` como Condor Reebok
+ * (`core@v4.3.57:android/src/main/java/com/reactlibrary/devices/AvailableDevices.java:55-57`). Vazio no SMA e no iDO.
  */
 public data class DeviceProfile(
 	val id: String,
@@ -121,4 +163,5 @@ public data class DeviceProfile(
 	val family: Family,
 	val gattCandidates: List<GattCandidate>,
 	val quirks: Quirks,
+	val bleNamePrefixes: List<String> = emptyList(),
 )

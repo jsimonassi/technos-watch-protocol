@@ -1,5 +1,6 @@
 package br.com.grupotechnos.watch.protocol.testing
 
+import br.com.grupotechnos.watch.protocol.log.FrameDirection
 import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -44,5 +45,20 @@ class RecordingLoaderTest {
 			val text = moment.format(pattern)
 			assertEquals(moment.toInstant().toEpochMilli(), RecordingLoader.parse(header(text), zone).header.recordedAtEpochMillis, text)
 		}
+	}
+
+	@Test
+	fun readPacketsAndExtraHeaderKeys() {
+		// As fixtures de referência (scripts/btsnoop2jsonl.py) trazem chaves extras no cabeçalho e pacotes READ.
+		val header = header("2026-10-31T15:43:12.209-03:00").removeSuffix("}") +
+			",\"source\":\"hci\",\"gatt\":[{\"service\":\"180a\",\"characteristics\":[]}],\"redactions\":\"texto\"}"
+		val read = "{\"type\":\"packet\",\"dir\":\"READ\",\"atMs\":1535,\"characteristic\":\"00002a29-0000-1000-8000-00805f9b34fb\",\"hex\":\"4D4F594F554E472D5632\"}"
+		val recording = RecordingLoader.parse(header + "\n" + read + "\n", "inline")
+		assertEquals("2026-10-31T15:43:12.209-03:00", recording.header.recordedAt)
+		val packet = recording.packets.single()
+		assertEquals(FrameDirection.READ, packet.direction)
+		assertEquals("00002a29-0000-1000-8000-00805f9b34fb", packet.characteristic)
+		// O Recording.toJsonl (o FrameJsonl do host) escreve "dir":"READ" de volta.
+		assertEquals(read, recording.toJsonl().lines()[1])
 	}
 }

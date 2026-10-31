@@ -6,6 +6,7 @@ import br.com.grupotechnos.watch.protocol.domain.DataKind
 import br.com.grupotechnos.watch.protocol.domain.DeviceInfo
 import br.com.grupotechnos.watch.protocol.domain.SleepSession
 import br.com.grupotechnos.watch.protocol.domain.StepsDay
+import br.com.grupotechnos.watch.protocol.domain.StepsSample
 import br.com.grupotechnos.watch.protocol.domain.WatchErrorCodes
 import br.com.grupotechnos.watch.protocol.domain.WatchException
 import br.com.grupotechnos.watch.protocol.driver.DeviceDriver
@@ -17,6 +18,7 @@ import br.com.grupotechnos.watch.protocol.log.WatchLogger
 import br.com.grupotechnos.watch.protocol.profile.DeviceProfile
 import br.com.grupotechnos.watch.protocol.profile.DeviceRegistry
 import br.com.grupotechnos.watch.protocol.profile.GattCandidate
+import br.com.grupotechnos.watch.protocol.profile.NotifyChannel
 import br.com.grupotechnos.watch.protocol.profile.Profiles
 import br.com.grupotechnos.watch.protocol.profile.StepsAggregation
 import br.com.grupotechnos.watch.protocol.transport.DiscoveredService
@@ -515,7 +517,7 @@ internal class SessionEngine(
 			val link = configure(attempt)
 			val driver = Drivers.create(link)
 			attempt.driver = driver
-			link.describer = driver::describe
+			link.describer = { characteristic, value -> driver.describe(characteristic, value) }
 			driver.start(attempt.scope)
 			attempt.scope.launch { driver.notices.collect { notice -> onNotice(attempt, notice) } }
 			attempt.stage = Stage.HANDSHAKING
@@ -536,8 +538,9 @@ internal class SessionEngine(
 
 	/**
 	 * Descoberta, escolha do candidato GATT, CCCD e MTU (`docs/arquitetura.md`, estado CONFIGURING). Os CCCD são ligados
-	 * um de cada vez: o de `notify` e depois os de `extraNotify`, na ordem do perfil (no iDO, `0AF7` e `0AF2`, a ordem da
-	 * SDK). O MTU só é pedido quando o perfil pede mais que 23.
+	 * um de cada vez: o de `notify`, depois os de `extraNotify`, na ordem do perfil (no iDO, `0AF7` e `0AF2`, a ordem da
+	 * SDK), e por fim os de `sideNotify` ([enableSideNotifications]; no CRP, `fee3` e depois `2a37`, `fee1` e `2a19`). O
+	 * MTU só é pedido quando o perfil pede mais que 23, depois de todos os CCCD.
 	 */
 	private suspend fun configure(attempt: Attempt): SessionDriverLink {
 		val profile = attempt.profile
@@ -557,7 +560,12 @@ internal class SessionEngine(
 				"none of ${profile.gattCandidates.map { it.service }} found; discovered ${discovered.services.map { it.uuid }}",
 			)
 		val extras = if (candidate.extraNotify.isEmpty()) "" else ", extra notify ${candidate.extraNotify}"
-		log(LogLevel.INFO, "configure", "using service ${candidate.service} (write ${candidate.write}, notify ${candidate.notify}$extras)")
+		val sides = if (candidate.sideNotify.isEmpty()) "" else ", side notify ${candidate.sideNotify.map { it.characteristic }}"
+		log(
+			LogLevel.INFO,
+			"configure",
+			"using service ${candidate.service} (write ${candidate.write}, notify ${candidate.notify}$extras$sides)",
+		)
 		val link = SessionDriverLink(profile, candidate, clock, logger, transport, operations, quirks.commandTimeoutMs * 2)
 		attempt.link = link
 		for (characteristic in listOf(candidate.notify) + candidate.extraNotify) {
@@ -572,6 +580,7 @@ internal class SessionEngine(
 				throw WatchException(failureCode(cccd.status), "enableNotifications on $characteristic failed, status=${cccd.status}")
 			}
 		}
+		enableSideNotifications(candidate.sideNotify, quirks.commandTimeoutMs)
 		if (quirks.requestMtu <= SessionDriverLink.DEFAULT_MTU) {
 			// O iDO não pede MTU (a SDK nunca chama requestMtu) e cada frame legado cabe em 20 bytes.
 			link.mtu = SessionDriverLink.DEFAULT_MTU
@@ -599,10 +608,51 @@ internal class SessionEngine(
 	}
 
 	/**
+	 * Liga as CCCDs de `sideNotify`, uma de cada vez, na ordem do perfil. Nenhuma é obrigatória: status diferente de
+	 * sucesso, silêncio em [timeoutMs] ou exceção do host viram WARN e a sessão segue sem aquela notificação (no CRP, o
+	 * aviso de bateria e os passos ao vivo são extras; a leitura continua funcionando). A exceção é
+	 * `GattStatus.PAIRING_REMOVED`, que encerra a tentativa como nas CCCDs obrigatórias (ADR 23). Uma queda do link no
+	 * meio (o `DISCONNECTED` de `GattOperations.failAll`) também propaga.
+	 */
+	private suspend fun enableSideNotifications(channels: List<NotifyChannel>, timeoutMs: Long) {
+		for (side in channels) {
+			val result = try {
+				operations.run(timeoutMs) { id ->
+					if (!hostCall("enableNotifications") { transport.enableNotifications(side.service, side.characteristic, id) }) {
+						throw HostCallFailed()
+					}
+				}
+			} catch (_: HostCallFailed) {
+				log(LogLevel.WARN, "configure", "enableNotifications on ${side.characteristic} threw; continuing without it")
+				continue
+			}
+			val cccd = result as? TransportEvent.NotificationsEnabled
+			when {
+				cccd == null -> log(
+					LogLevel.WARN,
+					"configure",
+					"enableNotifications on ${side.characteristic} not answered after $timeoutMs ms; continuing without it",
+				)
+				cccd.status == GattStatus.PAIRING_REMOVED -> throw WatchException(
+					WatchErrorCodes.PAIRING_REMOVED,
+					"enableNotifications on ${side.characteristic} failed, status=${cccd.status}",
+				)
+				cccd.status != GattStatus.SUCCESS -> log(
+					LogLevel.WARN,
+					"configure",
+					"enableNotifications on ${side.characteristic} failed, status=${cccd.status}; continuing without it",
+				)
+			}
+		}
+	}
+
+	/**
 	 * O primeiro candidato do perfil cujo serviço e as duas characteristics aparecem na descoberta. A ordem do perfil
 	 * é a prioridade (no fitGPS, `FF60` antes do NUS, como `SmaManager.selectUUID`, `SmaManager.java:1577-1591`). Das
 	 * `extraNotify`, ficam só as que existem no serviço; a que falta vai para o log e é pulada, porque nenhum driver
-	 * depende dela para o básico (no iDO, `0AF2` é o canal de saúde, que a PoC não usa).
+	 * depende dela para o básico (no iDO, `0AF2` é o canal de saúde, que a PoC não usa). Das `sideNotify`, ficam só as
+	 * cujo serviço e characteristic aparecem na descoberta (UUIDs normalizados); as que faltam vão para um WARN e são
+	 * puladas (no CRP, sem `2a19` a sessão só perde o aviso espontâneo de bateria).
 	 */
 	private fun chooseCandidate(profile: DeviceProfile, services: List<DiscoveredService>): GattCandidate? {
 		val byUuid = services.associateBy { GattUuid.normalize(it.uuid) }
@@ -618,7 +668,15 @@ internal class SessionEngine(
 			}
 			val (present, missing) = candidate.extraNotify.map(GattUuid::normalize).partition { it in characteristics }
 			if (missing.isNotEmpty()) log(LogLevel.WARN, "configure", "service $serviceUuid lacks extra notify $missing; skipping them")
-			return GattCandidate(serviceUuid, write, notify, present)
+			val (sidePresent, sideMissing) = candidate.sideNotify
+				.map { NotifyChannel(GattUuid.normalize(it.service), GattUuid.normalize(it.characteristic)) }
+				.partition { side ->
+					byUuid[side.service]?.characteristics?.any { GattUuid.normalize(it.uuid) == side.characteristic } == true
+				}
+			if (sideMissing.isNotEmpty()) {
+				log(LogLevel.WARN, "configure", "side notify ${sideMissing.map { it.characteristic }} not discovered; skipping them")
+			}
+			return GattCandidate(serviceUuid, write, notify, present, sidePresent)
 		}
 		return null
 	}
@@ -819,8 +877,9 @@ internal class SessionEngine(
 				val device = DeviceInfo(
 					profileId = attempt.profile.id,
 					address = attempt.target.address,
-					// O nome anunciado não chega até a sessão (pair recebe só o endereço); o perfil só casa nomes exatos,
-					// então o primeiro nome do perfil é o que o scan viu (DeviceRegistry.identify).
+					// O nome anunciado não chega até a sessão (pair recebe só o endereço): vale o primeiro nome do perfil.
+					// Nos perfis sem prefixo é o nome que o scan viu; no Condor Reebok, que o scan casa também por prefixo
+					// ("P85-1234", DeviceRegistry.identify), é o nome do modelo, "P85" (KDoc de DeviceInfo.bleName).
 					bleName = attempt.profile.bleNames.firstOrNull() ?: attempt.profile.id,
 					firmware = info.firmware,
 					bleVersion = info.bleVersion,
@@ -828,8 +887,8 @@ internal class SessionEngine(
 				succeed(command) { it.onDeviceInfo(command.requestId, device) }
 			}
 			is SessionCommand.ReadBattery -> {
-				val percent = driver.readBattery()
-				succeed(command) { it.onBattery(command.requestId, Battery(percent)) }
+				val battery = driver.readBatteryStatus()
+				succeed(command) { it.onBattery(command.requestId, Battery(battery.percent, battery.charging)) }
 			}
 			is SessionCommand.SetTime -> {
 				driver.setTime(clock.nowEpochMillis(), clock.timeZoneId())
@@ -845,6 +904,12 @@ internal class SessionEngine(
 				succeed(command) { it.onLiveSteps(command.requestId, today) }
 			}
 			is SessionCommand.SyncHistory -> runSync(attempt, driver, command)
+			is SessionCommand.ApplySteps -> {
+				val changed = history.mergeSteps(command.samples, attempt.profile.quirks.historyRetentionDays)
+				log(LogLevel.DEBUG, command.name, "merged ${command.samples.size} live step samples, $changed new or changed")
+				val today = history.today(aggregation())
+				succeed(command) { it.onLiveSteps(WatchSession.NO_REQUEST_ID, today) }
+			}
 		}
 	}
 
@@ -878,6 +943,40 @@ internal class SessionEngine(
 			}
 			is DriverNotice.LinkReported ->
 				log(LogLevel.INFO, "onLinkReported", "watch reports link connected=${notice.connected}")
+			is DriverNotice.BatteryReported -> {
+				if (!attempt.ready) {
+					log(LogLevel.DEBUG, "onBatteryReported", "battery notice before READY ignored")
+					return
+				}
+				val battery = Battery(notice.battery.percent, notice.battery.charging)
+				log(LogLevel.INFO, "onBatteryReported", "watch reports battery ${battery.percent}% charging=${battery.charging}")
+				notifyListener("onBattery") { it.onBattery(WatchSession.NO_REQUEST_ID, battery) }
+			}
+			is DriverNotice.StepsUpdated -> onStepsUpdated(attempt, notice.samples)
+		}
+	}
+
+	/**
+	 * Passos ao vivo (CRP: FEE1 notifica cerca de uma vez por segundo enquanto a pessoa anda). Guarda as amostras mais
+	 * novas de cada instante em [Attempt.pushedSteps] e, se não houver um envio agendado, agenda um para daqui a
+	 * [LIVE_STEPS_THROTTLE_MS]: no máximo uma mescla e um `onLiveSteps` a cada 2 s, sempre com o último valor. Um
+	 * debounce que reiniciasse a cada aviso nunca dispararia durante a caminhada. O envio passa pela fila
+	 * ([SessionCommand.ApplySteps]) para manter a ordem com um sync em andamento.
+	 */
+	private fun onStepsUpdated(attempt: Attempt, samples: List<StepsSample>) {
+		if (!attempt.ready) {
+			log(LogLevel.DEBUG, "onStepsUpdated", "live steps before READY ignored")
+			return
+		}
+		for (sample in samples) attempt.pushedSteps[sample.atEpochMillis] = sample
+		if (attempt.pushJob != null) return
+		attempt.pushJob = attempt.scope.launch {
+			delay(LIVE_STEPS_THROTTLE_MS)
+			attempt.pushJob = null
+			if (!isCurrent(attempt) || attempt.pushedSteps.isEmpty()) return@launch
+			val pending = attempt.pushedSteps.values.toList()
+			attempt.pushedSteps.clear()
+			enqueue(SessionCommand.ApplySteps(pending))
 		}
 	}
 
@@ -1021,7 +1120,16 @@ internal class SessionEngine(
 		var inFlight: SessionCommand? = null
 		var commandJob: Job? = null
 		var debounce: Job? = null
+
+		/** Amostras de passos ao vivo ainda não mescladas, pela chave `atEpochMillis` (ver [onStepsUpdated]). */
+		val pushedSteps = LinkedHashMap<Long, StepsSample>()
+
+		/** Envio agendado das amostras de [pushedSteps]; `null` quando não há nenhum. */
+		var pushJob: Job? = null
 	}
+
+	/** O host lançou ao ligar uma CCCD de `sideNotify`: interrompe a espera da operação sem esperar o timeout. */
+	private class HostCallFailed : Exception()
 
 	/** Entradas da caixa da sessão, tratadas em ordem por uma única corrotina. */
 	private sealed interface SessionInput {
@@ -1043,6 +1151,9 @@ internal class SessionEngine(
 
 		/** Janela que junta vários avisos `DataChanged` numa releitura só. */
 		const val DATA_CHANGED_DEBOUNCE_MS: Long = 2_000
+
+		/** Intervalo mínimo entre duas mesclas de passos ao vivo (`DriverNotice.StepsUpdated`) e os `onLiveSteps` delas. */
+		const val LIVE_STEPS_THROTTLE_MS: Long = 2_000
 
 		/** Primeira espera depois de uma tentativa de reconexão que falhou. */
 		const val RECONNECT_BASE_DELAY_MS: Long = 2_000

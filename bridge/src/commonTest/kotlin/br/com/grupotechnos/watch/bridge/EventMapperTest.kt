@@ -84,6 +84,16 @@ class EventMapperTest {
 	}
 
 	@Test
+	fun batteryCarriesTheChargingFlag() {
+		// CRP: 2A19 = 0x9B (155) é carregando com 55 % (regra do Core, CRPService.java:1814-1822; o driver já converte).
+		assertEquals(
+			mapOf("percentage" to 55, "charging" to true, "battery" to "55%"),
+			EventMapper.battery(Battery(55, charging = true)),
+		)
+		assertEquals(false, EventMapper.battery(Battery(49, charging = false))["charging"])
+	}
+
+	@Test
 	fun pedometerAndHistoryPedometer() {
 		val day = StepsDay("2026-10-28", "2026-10-28T00:00:00-03:00", steps = 4321, calories = 150, distanceMeters = 3012.5)
 		assertEquals(

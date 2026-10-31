@@ -16,13 +16,15 @@ O framework iOS `TechnosWatchProtocol` (estático, prefixo ObjC `TWP`) é gerado
 lado a lado. As tarefas `checkObjcHeader`, `checkSwiftInterop` e `checkObjcInterop` conferem esse header guarda-chuva
 (o que não pode aparecer, o que o Swift usa e o que o shim Objective-C++ do TurboModule chama).
 
-Documentação de desenho no repositório: `docs/arquitetura.md` (seção 12, o contrato JS comum; seção 13, o controlador)
-e `docs/decisoes.md` (ADRs 20 e 21).
+Documentação de desenho no repositório: `docs/arquitetura.md` (seção 12, o contrato JS comum; seção 13, o controlador,
+com o vínculo Bluetooth clássico) e `docs/decisoes.md` (ADRs 20, 21 e 30).
 
 # Package br.com.grupotechnos.watch.bridge
 
 O controlador (`CoreBridge`) e o que o host implementa para ele (`CoreHost`, `CoreEventSink`, `CoreCompletion`, com
-`CorePairing` e `CoreLogEntry`); domínio → payloads dos eventos JS (`EventMapper`), estado da sessão →
+`CorePairing` e `CoreLogEntry`); o vínculo Bluetooth clássico dos relógios que usam chamadas e música pelo BR/EDR (o
+Condor Reebok): `CoreHost.hasClassicBond`/`requestClassicBond`/`removeClassicBond`, o resultado em
+`CoreBridge.onClassicBondResult` (`ClassicBondResult`) e o código `CLASSIC_BOND_FAILED`; domínio → payloads dos eventos JS (`EventMapper`), estado da sessão →
 `deviceConnectStates` (`StateMapper`), `deletedSavedData` → dias locais (`SavedDataMapper`), códigos de erro do host
 (`HostErrorCodes`), a fila de eventos até o módulo JS existir (`PendingEvents`) e os comandos em andamento por
 `requestId` (`RequestRegistry`). As datas reproduzem o `java.time` do host Android antigo, inclusive nos dias de horário

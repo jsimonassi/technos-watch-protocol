@@ -8,8 +8,8 @@ import kotlinx.coroutines.flow.Flow
 /**
  * Costura entre a sessão genérica e o protocolo de uma família.
  *
- * A sessão não sabe o que é um BIND nem um CRC: só chama estes métodos. Hoje há duas implementações com codec próprio
- * sobre o [DriverLink]: o `SmaDriver` (fitGPS) e o `IdoDriver` (Life Ultra GPS). No futuro, um driver
+ * A sessão não sabe o que é um BIND nem um CRC: só chama estes métodos. Hoje há três implementações com codec próprio
+ * sobre o [DriverLink]: o `SmaDriver` (fitGPS), o `IdoDriver` (Life Ultra GPS) e o `CrpDriver` (Condor Reebok). No futuro, um driver
  * adaptador pode falar com a SDK de um fabricante e ignorar o link (ver [br.com.grupotechnos.watch.protocol.driver.HostDriver]).
  *
  * Contrato:
@@ -22,7 +22,10 @@ internal interface DeviceDriver {
 	/** Avisos que o relógio manda sem ter sido perguntado. Coletado pela sessão enquanto a conexão existir. */
 	val notices: Flow<DriverNotice>
 
-	/** Começa a consumir `link.notifications` dentro de [scope] (que a sessão cancela quando o link cai). */
+	/**
+	 * Começa a consumir `link.notifications` (e, no CRP, `link.sideNotifications`) dentro de [scope] (que a sessão
+	 * cancela quando o link cai).
+	 */
 	fun start(scope: CoroutineScope)
 
 	/**
@@ -32,10 +35,16 @@ internal interface DeviceDriver {
 	fun describe(value: ByteArray): String
 
 	/**
+	 * Resumo de um pacote de [characteristic] (TX, RX ou READ). O padrão ignora a characteristic e chama [describe]; o CRP
+	 * descreve as leituras e as notificações laterais (`fee1`, `2a19`, `2a37`) pelo conteúdo de cada uma.
+	 */
+	fun describe(characteristic: String, value: ByteArray): String = describe(value)
+
+	/**
 	 * Handshake do protocolo. Suspende até o relógio aceitar ou lança `WatchException(HANDSHAKE_FAILED | TIMEOUT)`.
 	 *
 	 * @param onPhase chamado a cada subetapa (no SMA: `"BIND"`, `"LOGIN"`; no iDO: `"BIND"` no primeiro pareamento e
-	 * `"LOGIN"` na reconexão), só para log e UI.
+	 * `"LOGIN"` na reconexão; no CRP: `"VERSION"` nos dois modos), só para log e UI.
 	 */
 	suspend fun handshake(mode: HandshakeMode, onPhase: (String) -> Unit)
 
@@ -44,6 +53,12 @@ internal interface DeviceDriver {
 
 	/** Percentual de bateria, de 0 a 100. */
 	suspend fun readBattery(): Int
+
+	/**
+	 * Bateria com o estado de carga. O padrão chama [readBattery] e devolve `charging = false` (SMA e iDO); o CRP aplica a
+	 * regra do Core para leituras de 2A19 acima de 100.
+	 */
+	suspend fun readBatteryStatus(): DriverBattery = DriverBattery(readBattery(), charging = false)
 
 	/** Acerta a hora do relógio. [nowEpochMillis] e [timeZoneId] vêm do relógio do telefone. */
 	suspend fun setTime(nowEpochMillis: Long, timeZoneId: String)
@@ -83,11 +98,31 @@ internal data class DriverDeviceInfo(
 	val bleVersion: String?,
 )
 
+/**
+ * Bateria lida ou avisada pelo relógio.
+ *
+ * @property percent percentual de 0 a 100.
+ * @property charging `true` quando o relógio informa carga (no CRP, leitura de 2A19 acima de 100).
+ */
+internal data class DriverBattery(val percent: Int, val charging: Boolean)
+
 /** Avisos espontâneos do relógio. */
 internal sealed interface DriverNotice {
-	/** Os dados de atividade mudaram; vale ler os passos de novo (no SMA: `02/70`). */
+	/**
+	 * Os dados de atividade mudaram; vale ler os passos de novo (no SMA: `02/70`; no CRP, uma notificação de FEE1 sem o
+	 * estado das meias horas desta conexão ou com o dia mudado).
+	 */
 	data object DataChanged : DriverNotice
 
 	/** O relógio informou o estado do link (no SMA: `04/62`). */
 	data class LinkReported(val connected: Boolean) : DriverNotice
+
+	/** Bateria que o relógio mandou sozinho (CRP: notificação de 2A19, uma por minuto no P85). */
+	data class BatteryReported(val battery: DriverBattery) : DriverNotice
+
+	/**
+	 * Amostras novas montadas pelo driver (CRP: notificação de FEE1, a meia hora atual e a amostra de totais do dia); a
+	 * sessão mescla no histórico e emite `onLiveSteps`, no máximo uma vez a cada `SessionEngine.LIVE_STEPS_THROTTLE_MS`.
+	 */
+	data class StepsUpdated(val samples: List<StepsSample>) : DriverNotice
 }

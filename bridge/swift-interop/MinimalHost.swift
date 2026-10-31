@@ -113,7 +113,7 @@ final class MinimalListener: NSObject, WatchSessionListener {
 
 	func onDeviceInfo(requestId: Int32, info: DeviceInfo) { received.append("info \(requestId) \(info.firmware)") }
 
-	func onBattery(requestId: Int32, battery: Battery) { received.append("battery \(requestId) \(battery.percent)") }
+	func onBattery(requestId: Int32, battery: Battery) { received.append("battery \(requestId) \(battery.percent) \(battery.charging)") }
 
 	func onLiveSteps(requestId: Int32, today: StepsDay) { received.append("steps \(requestId) \(today.steps)") }
 
@@ -219,7 +219,9 @@ func exerciseWholeSession() -> [String] {
 	// Domínio: o que o listener entrega e o que o `SampleStore` do host grava e relê.
 	let info = DeviceInfo(profileId: profileId, address: "addr", bleName: "fitGPS", firmware: "0.2.1", bleVersion: nil)
 	out.append("info \(info.profileId) \(info.address) \(info.bleName) \(info.firmware) \(info.bleVersion ?? "-")")
-	out.append("battery \(Battery(percent: 85).percent)")
+	// O Kotlin/Native não exporta valor padrão: o Swift passa `charging` sempre (no CRP, 2A19 acima de 100).
+	let battery = Battery(percent: 85, charging: true)
+	out.append("battery \(battery.percent) \(battery.charging)")
 	let sample = StepsSample(atEpochMillis: 0, steps: 10, mode: 0, calories: 1, distanceMeters: 5.0)
 	out.append("sample \(sample.atEpochMillis) \(sample.steps) \(sample.mode) \(sample.calories) \(sample.distanceMeters)")
 	out.append(describe(day: StepsDay(dayKey: "2026-10-28", startOfDayIso: "2026-10-28T00:00:00-03:00", steps: 10, calories: 1, distanceMeters: 5.0)))
@@ -250,18 +252,31 @@ func describeProfiles() -> [String] {
 	let identified: DeviceProfile? = DeviceRegistry.shared.identify(bleName: "fitGPS", advertisedServices: [])
 	let byId: DeviceProfile? = DeviceRegistry.shared.byId(id: Profiles.shared.MORMAII_FIT_GPS.id)
 	out.append("identified \(identified?.id ?? "-") \(byId?.slug ?? "-")")
+	// Nome de scan com sufixo: o Condor Reebok é reconhecido pelo prefixo "P85" (o host mostra o appName no scan).
+	let condor: DeviceProfile = Profiles.shared.CONDOR_REEBOK
+	let byPrefix: DeviceProfile? = DeviceRegistry.shared.identify(bleName: "P85-1234", advertisedServices: [])
+	let matches: Bool = DeviceRegistry.shared.matchesName(profile: condor, name: " P85 ")
+	out.append("prefix \(byPrefix?.id ?? "-") \(matches)")
 	for profile in Profiles.shared.all {
 		let quirks: Quirks = profile.quirks
 		let maxFragment: Int32? = quirks.maxFragment?.int32Value
-		out.append("profile \(profile.id) \(profile.appName) \(profile.slug) \(profile.bleNames) \(profile.family.name) " +
+		let prefixes: [String] = profile.bleNamePrefixes
+		out.append("profile \(profile.id) \(profile.appName) \(profile.slug) \(profile.bleNames) \(prefixes) \(profile.family.name) " +
 			"mtu \(quirks.requestMtu) fragment \(maxFragment.map { String($0) } ?? "-") connect \(quirks.connectTimeoutMs) " +
 			"command \(quirks.commandTimeoutMs) retention \(quirks.historyRetentionDays) steps \(quirks.stepsAggregation.name)")
+		// O que o host iOS lê para o BLE: a espera entre frames é do driver, o bridging muda as opções do connect.
+		let gap: Int64 = quirks.commandGapMs
+		let classicBond: Bool = quirks.classicBond
+		let bridging: Bool = quirks.iosTransportBridging
+		out.append("quirks \(profile.id) gap \(gap) classic \(classicBond) bridging \(bridging)")
 		for candidate in profile.gattCandidates {
-			out.append("gatt \(candidate.service) \(candidate.write) \(candidate.notify)")
+			let side: [NotifyChannel] = candidate.sideNotify
+			out.append("gatt \(candidate.service) \(candidate.write) \(candidate.notify) side \(side.map { "\($0.service)/\($0.characteristic)" })")
 		}
 	}
-	let candidates: [GattCandidate] = [Profiles.shared.SMA_NUS, Profiles.shared.SMA_ROUND]
-	out.append("candidates \(candidates.map { $0.service }) family \(Family.sma.name)")
+	let candidates: [GattCandidate] = [Profiles.shared.SMA_NUS, Profiles.shared.SMA_ROUND, Profiles.shared.CRP_FEEA]
+	let families: [Family] = [Family.sma, Family.ido, Family.crp]
+	out.append("candidates \(candidates.map { $0.service }) families \(families.map { $0.name })")
 	return out
 }
 
@@ -277,12 +292,13 @@ func describeConstants() -> [String] {
 		GattStatus.shared.PAIRING_REMOVED,
 	]
 	let levels: [LogLevel] = [LogLevel.debug, LogLevel.info, LogLevel.warn, LogLevel.error]
-	let directions: [FrameDirection] = [FrameDirection.tx, FrameDirection.rx]
+	let directions: [FrameDirection] = [FrameDirection.tx, FrameDirection.rx, FrameDirection.read]
 	let writeTypes: [WriteType] = [WriteType.withResponse, WriteType.withoutResponse]
 	let header: String = FrameJsonl.shared.header(device: "fitgps", firmware: nil, platform: "ios", mtu: 23, recordedAtIso: "2026-10-28T14:30:00-03:00", timeZoneId: "America/Sao_Paulo")
 	NoopWatchLogger.shared.log(level: LogLevel.info, tag: "Host/check", message: "ok")
+	let classicBondFailed: String = HostErrorCodes.shared.CLASSIC_BOND_FAILED
 	return [
-		"codes \(errorCodes)",
+		"codes \(errorCodes) host \(classicBondFailed)",
 		"statuses \(statuses)",
 		"levels \(levels.map { $0.name }) directions \(directions.map { $0.name }) writes \(writeTypes.map { $0.name })",
 		header,
@@ -295,7 +311,7 @@ func describeConstants() -> [String] {
 func exerciseBridge() -> [String] {
 	let converter = FoundationConverter.shared
 	let mapper = EventMapper.shared
-	let battery: [String: Any] = mapper.battery(battery: Battery(percent: 85))
+	let battery: [String: Any] = mapper.battery(battery: Battery(percent: 85, charging: false))
 	let payload: [AnyHashable: Any] = converter.toDictionary(payload: battery)
 	let state: [String: Any] = mapper.connectStateChanged(state: ConnectionState.ready, phase: nil)
 	let error: [String: Any] = mapper.error(requestId: WatchSession.companion.NO_REQUEST_ID, code: HostErrorCodes.shared.BLUETOOTH_OFF, message: "Bluetooth is off", method: "scan")
@@ -304,7 +320,7 @@ func exerciseBridge() -> [String] {
 	precondition(connected as? Bool == true)
 	let codes: [String] = [
 		HostErrorCodes.shared.PERMISSION_DENIED, HostErrorCodes.shared.BLUETOOTH_OFF, HostErrorCodes.shared.INVALID_ARGUMENT,
-		HostErrorCodes.shared.IO_ERROR,
+		HostErrorCodes.shared.IO_ERROR, HostErrorCodes.shared.CLASSIC_BOND_FAILED,
 	]
 	let states: [Int32] = [
 		StateMapper.shared.DISCONNECTED, StateMapper.shared.CONNECTING, StateMapper.shared.CONNECTED, StateMapper.shared.BLUETOOTH_OFF,
@@ -337,9 +353,13 @@ func describeSleepDates(mapper: EventMapper, session: SleepSession) -> String {
 }
 
 /// `CoreHost` como o `CoreGraph.swift` do host iOS vai implementá-lo: permissões e estado do `CBCentralManager`,
-/// scan, tarefa de segundo plano no sync, pareamento salvo em `UserDefaults`, cabeçalho da gravação e o log em memória.
+/// scan, tarefa de segundo plano no sync, pareamento salvo em `UserDefaults`, cabeçalho da gravação, o log em memória e
+/// o vínculo Bluetooth clássico, que o iOS não deixa o app criar.
 final class MinimalCoreHost: NSObject, CoreHost {
 	private(set) var effects: [String] = []
+
+	/// O `CoreGraph.swift` liga isto ao `CoreBridge.onClassicBondResult(address:result:message:)` depois de criar o bridge.
+	var onClassicBondResult: ((String, ClassicBondResult, String) -> Void)?
 	private var pairing: CorePairing?
 	private var entries: [CoreLogEntry] = []
 
@@ -386,6 +406,21 @@ final class MinimalCoreHost: NSObject, CoreHost {
 	func clearLogs() { entries = [] }
 
 	func setLogLevel(level: LogLevel) { effects.append("level \(level.name)") }
+
+	/// O app iOS não enxerga os vínculos do sistema.
+	func hasClassicBond(address: String) -> Bool { false }
+
+	/// O iOS não deixa o app criar o vínculo BR/EDR: devolve `.unsupported`, de forma assíncrona, com a dica de Ajustes.
+	func requestClassicBond(address: String) {
+		effects.append("requestClassicBond \(address)")
+		let hint = "iOS apps cannot create a classic Bluetooth bond; pair calls in Settings > Bluetooth"
+		DispatchQueue.main.async { [weak self] in
+			self?.onClassicBondResult?(address, ClassicBondResult.unsupported, hint)
+		}
+	}
+
+	/// Só log: quem esquece o relógio nos Ajustes é o usuário.
+	func removeClassicBond(address: String) { effects.append("removeClassicBond \(address)") }
 }
 
 /// `CoreCompletion` sobre o par `resolve`/`reject` do React Native. O valor passa inteiro pelo `FoundationConverter`
@@ -435,6 +470,9 @@ func exerciseCoreBridge() -> [String] {
 	transport.events = session.events
 	let host = MinimalCoreHost()
 	let bridge = CoreBridge(session: session, logger: logger, host: host)
+	host.onClassicBondResult = { [weak bridge] address, result, message in
+		bridge?.onClassicBondResult(address: address, result: result, message: message)
+	}
 	let sink = MinimalEventSink()
 	var settled: [String] = []
 	func completion(_ method: String) -> CoreCompletion {
@@ -481,6 +519,11 @@ func exerciseCoreBridge() -> [String] {
 	bridge.onBluetoothTurnedOff()
 	bridge.onBluetoothTurnedOn()
 	bridge.onHostResume()
+	// Resultado do vínculo clássico, de qualquer thread: os três casos que o host Android e o iOS devolvem.
+	let bondResults: [ClassicBondResult] = [ClassicBondResult.bonded, ClassicBondResult.failed, ClassicBondResult.unsupported]
+	for result in bondResults {
+		bridge.onClassicBondResult(address: deviceId, result: result, message: "check \(result.name)")
+	}
 	bridge.invalidate(sink: sink)
 	session.close()
 	return settled + sink.emitted + host.effects

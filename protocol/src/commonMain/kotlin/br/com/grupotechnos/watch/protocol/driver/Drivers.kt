@@ -1,5 +1,6 @@
 package br.com.grupotechnos.watch.protocol.driver
 
+import br.com.grupotechnos.watch.protocol.crp.CrpDriver
 import br.com.grupotechnos.watch.protocol.ido.IdoDriver
 import br.com.grupotechnos.watch.protocol.profile.Family
 import br.com.grupotechnos.watch.protocol.sma.SmaDriver
@@ -12,5 +13,6 @@ internal object Drivers {
 	fun create(link: DriverLink): DeviceDriver = when (link.profile.family) {
 		Family.SMA -> SmaDriver(link)
 		Family.IDO -> IdoDriver(link)
+		Family.CRP -> CrpDriver(link)
 	}
 }

@@ -37,8 +37,9 @@ import kotlin.test.fail
  * aparecer nela, senão o teste falha.
  *
  * A dedução e a máscara daqui são do SMA. Uma gravação cujo `device` do cabeçalho o `DeviceRegistry` identifica como de
- * outra família é pulada com uma linha `REPLAY <caminho>: skipped (family <família>…)`; as do iDO rodam no
- * `IdoRealFixturesReplayTest`. Um `device` desconhecido continua sendo reproduzido como SMA.
+ * outra família é pulada com uma linha `REPLAY <caminho>: skipped (family <família>, replayed by its family test)`; as do
+ * iDO rodam no `IdoRealFixturesReplayTest` e as do CRP no `CrpRealFixturesReplayTest`. Um `device` desconhecido continua
+ * sendo reproduzido como SMA.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class RealFixturesReplayTest {
@@ -54,7 +55,7 @@ class RealFixturesReplayTest {
 			val recording = RecordingLoader.load(path)
 			val family = DeviceRegistry.identify(recording.header.device, emptyList())?.family
 			if (family != null && family != Family.SMA) {
-				println("REPLAY ${Fixtures.relative(path)}: skipped (family $family, replayed by IdoRealFixturesReplayTest)")
+				println("REPLAY ${Fixtures.relative(path)}: skipped (family $family, replayed by its family test)")
 				return@mapNotNull null
 			}
 			check(recording)

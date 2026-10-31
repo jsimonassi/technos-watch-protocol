@@ -57,7 +57,13 @@ internal class FakeCoreHost(private val journal: Journal) : CoreHost {
 	var logs: List<CoreLogEntry> = emptyList()
 	var export: () -> String = { "/data/corenext/frames-20261028-143000.jsonl" }
 
-	/** Consultas, na ordem (`"isBluetoothEnabled"`, `"isValidAddress(AA:…)"`, `"logEntries(3)"`). */
+	/** Resposta de [hasClassicBond]: o sistema já tem o vínculo Bluetooth clássico. */
+	var classicBonded: Boolean = false
+
+	/** Gancho chamado dentro de [requestClassicBond], depois de gravar o efeito (para responder de dentro do pedido). */
+	var onRequestClassicBond: ((String) -> Unit)? = null
+
+	/** Consultas, na ordem (`"isBluetoothEnabled"`, `"isValidAddress(AA:…)"`, `"logEntries(3)"`, `"hasClassicBond(AA:…)"`). */
 	val queries = mutableListOf<String>()
 
 	override fun missingScanPermission(): String? = missingScan.also { queries += "missingScanPermission" }
@@ -109,6 +115,18 @@ internal class FakeCoreHost(private val journal: Journal) : CoreHost {
 	override fun clearLogs() = journal.add("host clearLogs")
 
 	override fun setLogLevel(level: LogLevel) = journal.add("host setLogLevel $level")
+
+	override fun hasClassicBond(address: String): Boolean {
+		queries += "hasClassicBond($address)"
+		return classicBonded
+	}
+
+	override fun requestClassicBond(address: String) {
+		journal.add("host requestClassicBond $address")
+		onRequestClassicBond?.invoke(address)
+	}
+
+	override fun removeClassicBond(address: String) = journal.add("host removeClassicBond $address")
 
 	private companion object {
 		val MAC = Regex("^([0-9A-F]{2}:){5}[0-9A-F]{2}$")

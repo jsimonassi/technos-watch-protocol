@@ -147,6 +147,8 @@ internal object ReplayScenario {
 		val rx = SmaReassembler(Profiles.MORMAII_FIT_GPS.quirks.fragmentGapTimeoutMs)
 		var tx: ByteArray? = null
 		for (packet in recording.packets) {
+			// Leituras GATT não são frames SMA (o SMA nem lê; a direção existe para o CRP).
+			if (packet.direction == FrameDirection.READ) continue
 			if (packet.direction == FrameDirection.RX) {
 				for (event in rx.accept(packet.value, packet.atMs)) {
 					if (event is SmaReassemblyEvent.Frame) {

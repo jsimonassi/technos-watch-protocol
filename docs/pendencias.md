@@ -8,6 +8,8 @@ Cada item diz a hipótese ou o critério que fecha e onde registrar o resultado.
 
 O caminho do iOS (o que as etapas sem relógio já provaram e o que falta até um host iOS) está na seção [iOS](#ios), no fim.
 
+A validação do Condor Reebok (família CRP, fase 1) no Android e no iPhone, o que ficou para as fases 2 a 4 e os bugs do Condor de produção que a fase 0 achou estão na seção [Condor Reebok (CRP)](#condor-reebok-crp).
+
 As pendências do host Android e da integração com o app Mormaii (o watchdog de 50 s do sync do lado do app, polling de passos ao vivo, `FileProvider`, `deviceId`, eventos sem equivalente) estão no [`docs/pendencias.md` do Repo 2](../../react-native-technos-core-next/docs/pendencias.md), que aponta para cá para o roteiro com o relógio.
 
 ## Preparação
@@ -129,6 +131,58 @@ Primeiro teste no relógio em 2026-10-30, com o driver próprio e sem SDK de for
   - Não foi preciso: sem as esperas, o relógio respondeu ao primeiro `02/01` no Android e no iPhone (no iPhone, 0,7 s depois do `didConnect` e em 60 ms; `protocolo-ido.md`, seção 1.1). A pergunta do vínculo do sistema continua no item abaixo.
 - [ ] **O iPhone mostra o diálogo de pareamento do sistema?** Perguntar a quem testou em 2026-10-30 se, no pareamento que deu certo depois de esquecer o vínculo antigo, o iOS mostrou o pedido de pareamento Bluetooth do sistema (o alerta do iOS que pede para emparelhar o acessório), antes ou depois da confirmação na tela do relógio. Responde se o relógio pede criptografia do link por conta própria: o vínculo do sistema que o iPhone guardava do app de produção (ADR 23) mostra que alguém pediu, o relógio ou a SDK iOS. Se pedir, o iOS cria um vínculo novo a cada pareamento por este core e o `PAIRING_REMOVED` volta toda vez que o relógio for pareado com outro telefone. Registrar em `protocolo-ido.md`, seções 1.1 e 8, e na ADR 23.
 - [ ] **Vínculo apagado no Android (o par do `PAIRING_REMOVED`)**: relógio pareado neste core num Android, depois pareado com outro telefone (o iPhone), e de volta ao Android com **Reconnect last** e com um `pair` novo. Só existe se o Android tiver criado um vínculo do sistema (o driver nunca chama `createBond`; olhar a lista de pareados das configurações e o `ACTION_BOND_STATE_CHANGED` no log). Anotar o status que o `BluetoothGatt` entrega (falha de autenticação ou de criptografia, ou queda logo depois de conectar), se a sessão entra em laço de reconexão e se o usuário precisa esquecer o relógio nas configurações (um app não remove o vínculo sem a API oculta `removeBond`). Hoje o host Android repassa o status nativo e a sessão trata como falha comum (ADR 23; `docs/transporte-android.md` do Repo 2). Registrar na ADR 23 e no `docs/transporte-android.md` do Repo 2.
+
+## Condor Reebok (CRP)
+
+O driver CRP (`docs/protocolo-crp.md`, ADRs 25 a 32) foi escrito a partir da SDK Android descompilada (`crpblelib` 2.0.3), do binário iOS e de uma captura HCI do app Condor de produção pareando o P85 num Android (as fixtures de referência, `fixtures.md`, seção 5). Ele roda no replay estrito da fixture sintética (os TX do nosso driver contra os RX e READ reais) e decodifica as três referências, mas ainda não falou com o relógio. Nenhuma gravação real dele existe: `CrpRealFixturesReplayTest` imprime `REPLAY crp: no recordings yet`.
+
+**Antes de testar**: no Android, desfaça o pareamento no app Condor de produção (ou force a parada dele) e esqueça o P85 nas configurações de Bluetooth, para o vínculo clássico ser criado de novo por este core e os dois apps não disputarem o relógio. No iPhone, esqueça o P85 em Ajustes > Bluetooth se o Condor iOS já o pareou. Grave tudo pelo app de exemplo (**Export**, com o link ainda aberto: o `mtu` do cabeçalho decide o `b2` no replay, `fixtures.md`, seção 3.1) e copie o `frames-*.jsonl` mais recente para `fixtures/real/condorreebok/MOY-VS02-2.0.0/<cenário>.jsonl`; nunca o `logs-*`, que tem o MAC. Ele roda no `CrpRealFixturesReplayTest` na execução seguinte.
+
+### Android
+
+- [ ] **Scan**: o relógio aparece como `Condor Reebok` (`name` = appName, `bleName` `P85`, `profileId` `condorreebok`), com o scan sem filtro (o perfil tem prefixo). Se não aparecer, anotar o nome que o `BleScanner/onScanResult` viu. Registrar em `protocolo-crp.md`, seção 2.
+- [ ] **Pareamento**: fase `VERSION` e `READY` em cerca de 1 s. Conferir no log `Session/configure` as CCCDs `fee3`, `2a37`, `fee1` e `2a19` (as três últimas sem ser fatais: um WARN ali não derruba nada, mas tem de ser anotado), o MTU 517 e o `CrpDriver/handshake` (`protocol 'MOYOUNG-V2' -> V2, mtu 517, block 244`). Registrar em `protocolo-crp.md`, seções 2 e 5.
+- [ ] **Vínculo clássico**: logo depois do `READY`, o diálogo do sistema pede o emparelhamento; aceitar. Se a primeira tentativa falhar (na captura falhou com `0x06`, HCI 15:43:08.248), o diálogo tem de voltar sozinho, uma vez (nova tentativa 1,5 s depois). Depois do aceite: o INFO `CrpDriver/classicState` com `classic=01`, o INFO `CoreBridge/classicBond` com `ready`, e as chamadas e o áudio do relógio ligados nas configurações de Bluetooth sem o app abrir HFP/A2DP. Registrar em `protocolo-crp.md`, seção 10, e na ADR 30.
+- [ ] **Recusa do diálogo**: tocar em "Cancelar" dá `onError` `CLASSIC_BOND_FAILED` (`requestId` `-1`, `method` `"classicBond"`), a sessão BLE continua pronta e o diálogo não volta até o próximo `pairDevice`. Registrar na ADR 30.
+- [ ] **Bateria**: o `getBatteryStatus` igual ao da tela; um `onBatteryStatus` espontâneo por minuto (o aviso de `2A19`). **No carregador**: anotar o byte cru (o `hex` do `READ` de `2a19` no export) e se o `charging` vem `true`; a regra "> 100 = carregando" é do Core e nunca foi vista no P85. Registrar na ADR 31 e em `protocolo-crp.md`, seção 7.
+- [ ] **Firmware**: `getFirmwareInfo` dá `MOY-VS02-2.0.0` e o `bleVersion` é `MOYOUNG-V2`.
+- [ ] **Hora**: depois do pareamento e de um `setTime`, a hora, o dia e o fuso na tela do relógio iguais aos do telefone. Registrar em `protocolo-crp.md`, seção 7.
+- [ ] **Passos ao vivo**: andar com o app aberto; o `onPedometer` acompanha a tela do relógio, no máximo uma vez a cada 2 s, com a distância e as calorias do relógio (o Condor de produção mostrava zeros durante a atividade). Registrar na ADR 28.
+- [ ] **Sync**: `syncDataHistory` e conferir hoje (passos, metros e kcal iguais à tela) e ontem. Anotar se o `33 01` foi respondido (log `CrpDriver/legacyHistory`; sem resposta, `0x33 history disabled for this connection`). Registrar em `protocolo-crp.md`, seções 8 e 13.
+- [ ] **Sono, depois de uma noite com o relógio no pulso**: o `32` com registros, a sessão com o `dayKey` de hoje, e os totais contra a tela (o total é leve + profundo + REM, sem o acordado; sem o REM fabricado da SDK). Anotar se `33 03`/`33 04` responderam. Fixture `sleep-night.jsonl`. Registrar em `protocolo-crp.md`, seção 9, e na ADR 29.
+- [ ] **Bluetooth desligado e religado**: reconexão sozinha, fase `VERSION`, o `31` 250 ms depois do `READY`, e o relógio reabrindo o clássico com a chave guardada (`classic=01` sem diálogo).
+- [ ] **Fora de alcance e de volta**: reconexão sozinha, como acima.
+- [ ] **Esquecer**: o `F8` sai (TX `FEEA2005F8` no export), o P85 some das configurações de Bluetooth (`removeBond`) e um `pair` novo pede o diálogo de novo. Anotar o que o relógio mostra depois do `F8`. Registrar em `protocolo-crp.md`, seção 10.
+- [ ] **Esquecer em dois casos de borda** (host Android, `ClassicBonder`): (1) com o Bluetooth desligado, o vínculo fica pendente e sai quando o Bluetooth liga (o relógio não pode reabrir HFP/A2DP com a chave guardada); (2) com o diálogo do pareamento ainda aberto, o `cancelBondProcess()` fecha o diálogo, ou, se o usuário aceitar mesmo assim, o vínculo é removido assim que aparece, e nenhum `onError` `CLASSIC_BOND_FAILED` sai. Anotar no log `ClassicBonder/remove` o que a reflexão devolveu. Registrar no `docs/transporte-android.md` do Repo 2.
+
+### iPhone
+
+- [ ] **Pareamento**: anotar se o iOS mostra algum pedido de pareamento do sistema (do LE ou das chamadas) e quando; o WARN `CoreBridge/classicBond` com a dica "iOS apps cannot create a classic Bluetooth bond; pair calls in Settings > Bluetooth", sem `onError`. Anotar se, com o transport bridging, as chamadas do relógio aparecem sozinhas em Ajustes ou se é preciso parear lá. Registrar em `protocolo-crp.md`, seções 10 e 11, e na ADR 30.
+- [ ] **Os mesmos comandos** do Android (bateria, firmware, hora, passos ao vivo, sync, sono, Bluetooth desligado, esquecer), com o `mtu` do cabeçalho do export (o transporte iOS volta a 23 a cada tentativa) conferido antes de versionar.
+
+### O que ficou para depois
+
+- **Fase 2**: o reset de fábrica `51 02` como método explícito da tela Dispositivo (o Core de produção o manda em todo "Desconectar", `core@v4.3.57:android/src/main/java/com/crp/bluetooth/connectionmanager/CRPBleConnectHelper.java:400-429`); o formato 12/24 h (`17 01`/`17 00`, `pair-sync@144792` e `@162416`); o perfil do usuário `0x12`; as metas (`B9`).
+- **Fase 3**: atividades (`B2`, com o registro final da caminhada da captura, 77 passos e 4 kcal), frequência cardíaca (`35`, `B6 02`, `2A37`) e estresse (`B9 11`).
+- **Fase 4**: `deviceId` no iOS (o Condor de produção usa o MAC do anúncio, `CRPDiscovery.mac`, e não o UUID do periférico; a SDK iOS lê `FEC9`/`FEE4`); a distância e as calorias trocadas no Android de produção (abaixo) e o que o backend espera receber.
+- **Sondas no relógio**: `0x33` e `B6` no P85 (a primeira gravação real responde); o vínculo LE no iPhone; a regra > 100 no carregador; o significado de `F9 02 xx`.
+- [x] **Máscara do replay** (2026-10-31): o `CrpTxMasker` (os segundos do `31`) passou a ser exercitado pelo `CrpSyntheticReplayTest.shiftedReplayClockIsMaskedOnlyInTheTimeFrame`, que reproduz a sintética com o relógio 7 s depois do `recordedAt` (casa com a máscara e falha só no `31` sem ela). A primeira gravação real o exercita de novo.
+- [x] **Frames `0x42` nas referências** (2026-10-31): a previsão do tempo (código do clima e temperaturas mínima e máxima, `sdk:f/a2.java:23-45`) saiu das três fixtures de referência na revisão de privacidade; o `0x42` entrou no padrão do `--redact-cmds` (ADR 32; `fixtures.md`, seção 5).
+- **Vínculo clássico, comportamento aceito**: só o `READY` que fecha um handshake pergunta `hasClassicBond` (o do fim de um sync, não); com o vínculo já feito, um INFO por conexão. A recusa, o pedido em andamento e os pedidos abandonados por um esquecer vivem só na memória, então um processo novo pede de novo no primeiro `READY` (ADR 30).
+
+### Bugs do Condor de produção (registro; esta biblioteca não os copia)
+
+Achados pela fase 0 e pela captura, para quem mantiver o app Condor atual (`core@v4.3.57`) ou comparar números com ele:
+
+- **Distância e calorias trocadas no `onHistoryPedometer` do Android**: `item.putDouble("distance", calories)` e `item.putInt("calorie", distance)` (`core@v4.3.57:android/src/main/java/com/crp/bluetooth/CRPService.java:391-392`; ainda no HEAD). O iOS está certo. O `EventMapper` daqui manda metros em `distance` e kcal em `calorie`.
+- **Distância e calorias por meia hora zeradas**: o Core pede `5D`/`5C` e grava as meias horas, mas o P85 nunca responde (`pair-sync@56403`, `@56631`, `@58957`, `@59184`).
+- **`B6 01` ignorado**: o `onHistorySleepChange` do Core Android é vazio; um firmware que só respondesse `B6 01` nunca teria sono salvo (`core@v4.3.57:android/src/main/java/com/crp/bluetooth/CRPService.java:1713-1741`).
+- **Fila travada no `0x32`**: sem resposta ao `0x32`, a fila da SDK fica parada até o watchdog, que só é avaliado quando outro comando entra (`sdk:o/b.java:18-38`; `sdk:p/c.java:33-43`), e o `B6 01 00` fica preso atrás.
+- **Zeros durante a atividade**: o Core Android só aceita a primeira notificação de `FEE1` depois de cada sync (`core@v4.3.57:android/src/main/java/com/crp/bluetooth/CRPService.java:1418-1452`); na captura, o Condor mostrou zeros durante a caminhada (`walk@106148` a `@136148`).
+- **Timeout de 12 s durante o diálogo do vínculo**: o timeout do estado "conectando" não é cancelado enquanto o usuário decide; o GATT é fechado, o handshake se repete e um `BOND_NONE` faz o diálogo voltar em laço (`core@v4.3.57:android/src/main/java/com/crp/bluetooth/connectionmanager/CRPBleConnectHelper.java:187-188, 513-518, 788-795`).
+- **`markYesterdayDataAsSynced`** é gravado no primeiro sinal de "ontem" de qualquer tipo (`core@v4.3.57:android/src/main/java/com/crp/bluetooth/CRPService.java:1279-1281`).
+- **`safeSum`** descarta o último bucket quando a lista tem tamanho ímpar (`core@v4.3.57:android/src/main/java/com/crp/bluetooth/steps/CRPStepsAndRelatedListenerManager.java:117-121`).
+- **`> 20` contra `≥ 20`**: o `onSleepChange` do Core usa hora `> 20`, estrito, e a SDK usa `≥ 20` (`core@v4.3.57:android/src/main/java/com/crp/bluetooth/CRPService.java:1721`; `sdk:j/o0.java:169-173`).
 
 ## Itens técnicos abertos
 

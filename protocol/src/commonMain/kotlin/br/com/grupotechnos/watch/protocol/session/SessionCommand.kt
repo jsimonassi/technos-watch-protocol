@@ -1,6 +1,7 @@
 package br.com.grupotechnos.watch.protocol.session
 
 import br.com.grupotechnos.watch.protocol.domain.DataKind
+import br.com.grupotechnos.watch.protocol.domain.StepsSample
 
 /**
  * Um comando na fila da conexão. A fila executa um de cada vez, em ordem de chegada, porque o `DeviceDriver` não
@@ -55,6 +56,15 @@ internal sealed class SessionCommand(val requestId: Int, val internal: Boolean) 
 	/** `refreshSteps` → `onLiveSteps`; interno depois de `DriverNotice.DataChanged`, com [WatchSession.NO_REQUEST_ID]. */
 	class RefreshSteps(requestId: Int, internal: Boolean) : SessionCommand(requestId, internal) {
 		override val name: String = "refreshSteps"
+	}
+
+	/**
+	 * Mescla no histórico as amostras que o driver montou com os passos ao vivo (`DriverNotice.StepsUpdated`; no CRP, a
+	 * notificação de FEE1) e emite `onLiveSteps` com [WatchSession.NO_REQUEST_ID]. Interno: passa pela fila para manter a
+	 * ordem com um sync em andamento.
+	 */
+	class ApplySteps(val samples: List<StepsSample>) : SessionCommand(WatchSession.NO_REQUEST_ID, internal = true) {
+		override val name: String = "applyLiveSteps"
 	}
 
 	/** `syncHistory` → `onSyncStarted`, `onSyncProgress`, `onSyncFinished`. */
