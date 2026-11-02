@@ -136,6 +136,7 @@ class CoreBridgeGoldenTest {
 						listOf(DataKind.STEPS) -> step("refreshSteps()") { bridge.refreshSteps(c("refreshSteps")) }
 						else -> fail("no JS method reads only ${action.kinds}")
 					}
+					ReplayAction.RefreshSteps -> step("refreshSteps()") { bridge.refreshSteps(c("refreshSteps")) }
 					ReplayAction.BluetoothCycle -> step("[host] Bluetooth off, then on") {
 						// O que o CoreGraph do Android faz no BluetoothStateReceiver: para o scan, o transporte entrega o
 						// desligado; ao religar, entrega o ligado e só depois pede a reconexão (a sessão ainda não processou).

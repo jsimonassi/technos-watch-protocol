@@ -27,6 +27,15 @@ internal sealed interface ReplayAction {
 	data object ReadBattery : ReplayAction
 	data object ReadDeviceInfo : ReplayAction
 	data class Sync(val kinds: List<DataKind>) : ReplayAction
+
+	/**
+	 * `WatchSession.refreshSteps`: termina com `onLiveSteps`, sem passar por `SYNCING`. Gera os mesmos bytes de um
+	 * `Sync([STEPS])`, então nenhum `deduce` a produz: só um roteiro escrito à mão, quando o log da gravação mostra que o
+	 * app pediu um Refresh steps (`CrpRealFixturesReplayTest.androidRecordingGivesWhatTheWatchAnswered`) ou quando nada
+	 * mais explica uma leitura só de passos (`CrpRealFixturesReplayTest.iosRecordingGivesWhatTheWatchAnswered`: no CRP,
+	 * pelo `CoreBridge`, sem FEE1 notificado).
+	 */
+	data object RefreshSteps : ReplayAction
 	data object Forget : ReplayAction
 
 	/**
@@ -265,6 +274,7 @@ internal fun TestScope.runReplay(
 			ReplayAction.ReadBattery -> session.readBattery(id)
 			ReplayAction.ReadDeviceInfo -> session.readDeviceInfo(id)
 			is ReplayAction.Sync -> session.syncHistory(id, action.kinds)
+			ReplayAction.RefreshSteps -> session.refreshSteps(id)
 			ReplayAction.Forget -> session.disconnect(id, forget = true)
 			ReplayAction.BluetoothCycle -> {
 				transport.setBluetooth(false)

@@ -140,6 +140,7 @@ internal class RealtimeReplay(
 					ReplayAction.ReadBattery -> session.readBattery(id)
 					ReplayAction.ReadDeviceInfo -> session.readDeviceInfo(id)
 					is ReplayAction.Sync -> session.syncHistory(id, action.kinds)
+					ReplayAction.RefreshSteps -> session.refreshSteps(id)
 					ReplayAction.Forget -> session.disconnect(id, forget = true)
 					ReplayAction.BluetoothCycle -> {
 						val beforeOff = callbacks.size
